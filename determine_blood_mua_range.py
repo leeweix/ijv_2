@@ -8,10 +8,10 @@ Created on Thu Nov 12 13:57:56 2020
 Objective:
     To investigate the appropriate mua range in ijv & cca
 """
-
-from IPython import get_ipython
-get_ipython().magic('clear')
-get_ipython().magic('reset -f')
+# %%
+# from IPython import get_ipython
+# get_ipython().magic('clear')
+# get_ipython().magic('reset -f')
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -23,6 +23,7 @@ plt.rcParams["figure.dpi"] = 300
 
 # %% parameters
 # read data
+a = 100
 observeWl = np.linspace(650, 950, num=301, dtype=int)
 projectWl = np.linspace(725, 875, num=151, dtype=int)
 epsilonHbO2HbPath = "shared_files/model_input_related/absorption/epsilon_hemoglobin.txt"

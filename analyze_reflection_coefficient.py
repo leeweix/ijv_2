@@ -4,7 +4,7 @@ Created on Thu Aug 26 00:06:58 2021
 
 @author: Eric
 """
-
+# %%
 from IPython import get_ipython
 get_ipython().magic('clear')
 get_ipython().magic('reset -f')

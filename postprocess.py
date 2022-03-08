@@ -10,6 +10,7 @@ Created on Fri Aug  6 17:24:45 2021
 # get_ipython().magic('clear')
 # get_ipython().magic('reset -f')
 import numpy as np
+# import cupy as cp
 from scipy import stats
 from scipy.signal import convolve
 import matplotlib.pyplot as plt
@@ -217,6 +218,33 @@ def getReflectance(mua, innerIndex, outerIndex, detectorNA, detectorNum, detOutp
     return reflectance
 
 
+
+def getMovingAverageReflectance(sessionID, mua):
+    with open(os.path.join(sessionID, "config.json")) as f:
+        config = json.load(f)  # about detector na, & photon number
+    with open(os.path.join(sessionID, "model_parameters.json")) as f:
+        modelParameters = json.load(f)  # about index of materials & fiber number
+    fiberSet = modelParameters["HardwareParam"]["Detector"]["Fiber"]
+    detOutputPathSet = glob(os.path.join(config["OutputPath"], sessionID, "mcx_output", "*.jdat"))  # about paths of detected photon data
+    print(detOutputPathSet)
+    reflectance = getReflectance(mua,
+                                 innerIndex = modelParameters["OptParam"]["Prism"]["n"], 
+                                 outerIndex = modelParameters["OptParam"]["Prism"]["n"], 
+                                 detectorNA = config["DetectorNA"], 
+                                 detectorNum = len(fiberSet)*3*2, 
+                                 detOutputPathSet = detOutputPathSet,
+                                 photonNum = config["PhotonNum"])
+    # print(f'reflectance: {reflectance}, shape: {reflectance.shape}')
+    # movingAverageFinalReflectanceMean = reflectance
+    movingAverageFinalReflectance = reflectance.reshape(reflectance.shape[0], -1, 3, 2).mean(axis=-1)
+
+    movingAverageFinalReflectance = movingAverage2D(movingAverageFinalReflectance, width=3).reshape(movingAverageFinalReflectance.shape[0], -1)
+
+    movingAverageFinalReflectanceMean = movingAverageFinalReflectance.mean(axis=0)
+
+    return movingAverageFinalReflectanceMean
+
+
 def getMeanPathlength(sessionID, mua):
     # read files
     with open(os.path.join(sessionID, "config.json")) as f:
@@ -269,6 +297,65 @@ def getMeanPathlength(sessionID, mua):
     
     return meanPathlength, movingAverageMeanPathlength
 
+def getNumofScatter(sessionID, mua):
+    # read files
+    with open(os.path.join(sessionID, "config.json")) as f:
+        config = json.load(f)  # about detector na, & photon number    
+    with open(os.path.join(sessionID, "model_parameters.json")) as f:
+        modelParameters = json.load(f)  # about index of materials & fiber number
+    detectorNA=config["DetectorNA"]
+    detOutputPathSet = glob(os.path.join(config["OutputPath"], sessionID, "mcx_output", "*.jdat"))  # about paths of detected photon data
+    innerIndex=modelParameters["OptParam"]["Prism"]["n"]
+    outerIndex=modelParameters["OptParam"]["Prism"]["n"]
+    detectorNum=len(modelParameters["HardwareParam"]["Detector"]["Fiber"])*3*2
+    
+    # analyze detected photon
+    NumofScatter = np.empty((len(detOutputPathSet), detectorNum, len(mua)))
+    for detOutputIdx, detOutputPath in enumerate(detOutputPathSet):
+        # read detected data
+        detOutput = jd.load(detOutputPath)
+        info = detOutput["MCXData"]["Info"]
+        photonData = detOutput["MCXData"]["PhotonData"]
+        
+        # unit conversion for photon pathlength
+        photonData["ppath"] = photonData["ppath"] * info["LengthUnit"]
+        
+        # retrieve valid detector ID and valid ppath
+        critAng = np.arcsin(detectorNA/innerIndex)
+        afterRefractAng = np.arccos(abs(photonData["v"][:, 2]))
+        beforeRefractAng = np.arcsin(outerIndex*np.sin(afterRefractAng)/innerIndex)
+        validPhotonBool = beforeRefractAng <= critAng
+        validDetID = photonData["detid"][validPhotonBool]
+        validDetID = validDetID - 1  # make detid start from 0
+        validPPath = photonData["ppath"][validPhotonBool]
+        validNScat = photonData["nscat"][validPhotonBool]
+        
+        # calculate mean pathlength        
+        for detectorIdx in range(info["DetNum"]):
+            # raw pathlength
+            usedValidPPath = validPPath[validDetID[:, 0]==detectorIdx]
+            # raw # of scattering event
+            usedValidPPath = validNScat[validDetID[:, 0]==detectorIdx]
+            # sigma(wi*pi), for i=0, ..., n
+            eachPhotonWeight = getSinglePhotonWeight(usedValidPPath, mua)
+            # print(f'usedValidPPath.shape: {usedValidPPath.shape}')
+            # print(f'mua: {mua}')
+            # print(f'eachPhotonWeight: {eachPhotonWeight}')
+            # print(f'NumofScatter: {NumofScatter}')
+            if eachPhotonWeight.sum() == 0:
+                NumofScatter[detOutputIdx][detectorIdx] = 0
+                continue
+            eachPhotonPercent = eachPhotonWeight / eachPhotonWeight.sum()
+            eachPhotonPercent = eachPhotonPercent.reshape(-1, 1)
+            NumofScatter[detOutputIdx][detectorIdx] = np.sum(eachPhotonPercent*usedValidPPath, axis=0)
+    
+    cvSampleNum = 10
+    NumofScatter = NumofScatter.reshape(-1, cvSampleNum, NumofScatter.shape[-2], NumofScatter.shape[-1]).mean(axis=0)
+    movingAverageNumofScatter = NumofScatter.reshape(NumofScatter.shape[0], -1, 3, 2, NumofScatter.shape[-1]).mean(axis=-2)
+    movingAverageNumofScatter = movingAverage2D(movingAverageNumofScatter, width=3).reshape(movingAverageNumofScatter.shape[0], -1, movingAverageNumofScatter.shape[-1])
+    
+    return NumofScatter, movingAverageNumofScatter
+
 
 def getSinglePhotonWeight(ppath, mua):
     """
@@ -287,7 +374,11 @@ def getSinglePhotonWeight(ppath, mua):
 
     """
     mua = np.array(mua)
-    weight = np.exp(-np.matmul(ppath, mua))
+    # print(f'ppath.shape {ppath.shape}\n')
+    # print(f'mua.shape {mua.shape}\n')
+    weight = np.exp(-(ppath @ mua))
+
+        
     return weight
 
 
