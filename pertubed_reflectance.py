@@ -68,7 +68,12 @@ for num_mus in range(mus_set):
         sessionID = 'small_ijv_' + wl + f'_{num_mus}'
 
         # define mua change
-        np.array( product([]))
+        mua_change = [[mua_skin2.at[id, 'mua1'], (mua_skin2.at[id, 'mua2'] + mua_skin2.at[id, 'mua1'])/2, mua_skin2.at[id, 'mua2']],
+                    [mua_fat2.at[id, 'mua1'], (mua_fat2.at[id, 'mua2'] + mua_fat2.at[id, 'mua1'])/2, mua_fat2.at[id, 'mua2']],
+                    [mua_muscle2.at[id, 'mua1'], (mua_muscle2.at[id, 'mua2'] + mua_muscle2.at[id, 'mua1'])/2, mua_muscle2.at[id, 'mua2']]]
+        mua_change2 = np.array( product(mua_change))
+# %%
+        
         mua_set = 
         # choose R ratio baseline
         if id == 0:
