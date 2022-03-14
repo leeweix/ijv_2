@@ -22,13 +22,6 @@ import pandas as pd
 from glob import glob
 from itertools import product
 
-# try:
-#     jd_path = "mcx/example/quicktest/small_ijv_730_0_0_detp.jdat"
-#     jdata = jd.load(jd_path)
-# except:
-#     print('jdata not founded !')
-
-
 # user setting
 data_path = 'training_data'
 wl_folder = glob(os.path.join(data_path, '*nm'))
@@ -36,7 +29,7 @@ mus_count = 27
 wl_list = [730, 760, 780, 810, 850]
 sds_choose = [7, 9, 11]
 sds_choose = np.array(sds_choose)-1
-
+        
 # load mua set
 mua_skin = pd.read_csv('skin.csv')
 mua_fat = pd.read_csv('fat.csv')
@@ -165,5 +158,19 @@ big_reflectance = small_reflectance * 0.9
 
 R_ratio = big_reflectance / small_reflectance
 
+
+
+# %% for change file name
+for id_mus in range(mus_count):
+    for id_wl, wl_path in enumerate(wl_folder):
+        wl = wl_path.split('\\')[1]
+        wl = wl.split('nm')[0]
+        sessionID = 'small_ijv_' + wl + f'_{id_mus}'
+        for i in range(100):
+                filename = os.path.join(wl_path, sessionID, 'mcx_output', sessionID + f'_{i+10}_detp.jdat')
+                filename_af = filename.replace('.jdat', '')
+                try:
+                        os.rename(filename, filename_af)
+                except:
+                        continue
 # %%
-print(list(product([1, 2, 3], [4, 5, 6], [7, 8, 9], [1, 1, 1, 1])))
