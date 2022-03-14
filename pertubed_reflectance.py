@@ -18,9 +18,14 @@ import matplotlib.pyplot as plt
 import jdata as jd
 import postprocess
 import os
+from tqdm import tqdm
 import pandas as pd
 from glob import glob
 from itertools import product
+
+def make_ijv_mua(id_wl, epsilon, saturation):
+        return list(2.303 * (epsilon.at[id_wl, 'HbO2']/64532*saturation + epsilon.at[id_wl, 'Hb']/64500*(1.-saturation)) * 150)
+
 
 # user setting
 data_path = 'training_data'
@@ -29,11 +34,12 @@ mus_count = 27
 wl_list = [730, 760, 780, 810, 850]
 sds_choose = [7, 9, 11]
 sds_choose = np.array(sds_choose)-1
-        
+
 # load mua set
 mua_skin = pd.read_csv('skin.csv')
 mua_fat = pd.read_csv('fat.csv')
 mua_muscle = pd.read_csv('muscle.csv')
+epsilon = pd.read_csv('epsilon.csv')
 
 # process skin
 arr_temp0 = np.interp(wl_list, mua_skin['wavelength'], mua_skin['mua1'])
@@ -61,51 +67,57 @@ mua_muscle2 = pd.DataFrame(data)
 
 # %%
 for id_mus in range(mus_count):
-    for id_wl, wl_path in enumerate(wl_folder):
-        wl = wl_path.split('\\')[1]
-        wl = wl.split('nm')[0]
-        sessionID = 'small_ijv_' + wl + f'_{id_mus}'
-        
-        
-        # define mua change
-        mua_change = {'skin' : [mua_skin2.at[id_wl, 'mua1'], (mua_skin2.at[id_wl, 'mua2'] + mua_skin2.at[id_wl, 'mua1'])/2, mua_skin2.at[id_wl, 'mua2']],
-                    'fat' : [mua_fat2.at[id_wl, 'mua1'], (mua_fat2.at[id_wl, 'mua2'] + mua_fat2.at[id_wl, 'mua1'])/2, mua_fat2.at[id_wl, 'mua2']],
-                    'muscle' : [mua_muscle2.at[id_wl, 'mua1'], (mua_muscle2.at[id_wl, 'mua2'] + mua_muscle2.at[id_wl, 'mua1'])/2, mua_muscle2.at[id_wl, 'mua2']]}
-        mua_change2 = np.array( list(product(mua_change['skin'], mua_change['fat'], mua_change['muscle'])))
-        mua_fix = {'air' : 0,
-                   'pla' : 1e4,
-                   'prism' : 0,
-                   'perturbed' : 0.49335,
-                   'ijv' : 0.49335,
-                   'cca' : 0.44465}    
-        mua_fix2 = np.array(list(mua_fix.values()) * mua_change2.shape[0]).reshape(mua_change2.shape[0], len(mua_fix))
-        mua_all = np.concatenate((mua_fix2[:, 0:3], mua_change2, mua_fix2[:, 3:6]), axis=1)
-        
-         
-        
-# ##############coding###################
-        for id_mua, mua in enumerate(mua_all):
-            # get WMC reflectance, pathlength, collision times, wait to improve!
-            movingAverageFinalReflectanceMean = postprocess.getMovingAverageReflectance(os.path.join(wl_path, sessionID), mua)
-            small_reflectance = movingAverageFinalReflectanceMean[sds_choose]    
-            movingAverageMeanPathlength = postprocess.getMeanPathlength(os.path.join(wl_path, sessionID), mua)[1].mean(axis=0)
-            purturbed_pathlength = movingAverageMeanPathlength[sds_choose, 6]   
-            movingAverageNumofScatter = postprocess.getNumofScatter(os.path.join(wl_path, sessionID), mua)[1].mean(axis=0)
-            purturbed_num_scatter = movingAverageNumofScatter[sds_choose, 6] 
-            model_param = jd.load(os.path.join(sessionID, 'model_parameters.json'))
-            perturbed_region_mus = model_param['OptParam']['IJV']['mus']
-            perturbed_region_mua = mua[6]
-            perturbed_region_mut = perturbed_region_mua + perturbed_region_mus
-            ijv_mus = model_param['OptParam']['IJV']['mus']
-            ijv_mua = mua[7]
-            ijv_mut = ijv_mua + ijv_mus
-            # #########WAIT CONFIRM###########
-            # perturbed_coef = ((perturbed_region_mus / perturbed_region_mut) / (ijv_mus / ijv_mut))**purturbed_num_scatter\
-            #                     * (perturbed_region_mut / ijv_mut)**purturbed_num_scatter * np.exp(-(perturbed_region_mut - ijv_mut) * purturbed_pathlength)
-            # big_reflectance = small_reflectance * perturbed_coef
-            # ################################
-            big_reflectance = small_reflectance * 0.9
+        small_reflectance = np.zeros((len(mua_all), len(sds_choose), len(wl_list)))
+        big_reflectance = np.zeros((len(mua_all), len(sds_choose), len(wl_list)))
+        for id_wl, wl_path in enumerate(wl_folder):
+                wl = wl_path.split('\\')[1]
+                wl = wl.split('nm')[0]
+                sessionID = 'small_ijv_' + wl + f'_{id_mus}'
+                
+                saturation = np.array([0.3, 0.4, 0.5, 0.6, 0.7])
+                mua_ijv = make_ijv_mua(id_wl, epsilon, saturation)
+                
+                # define mua change
+                mua_change = {'skin' : [mua_skin2.at[id_wl, 'mua1'], (mua_skin2.at[id_wl, 'mua2'] + mua_skin2.at[id_wl, 'mua1'])/2, mua_skin2.at[id_wl, 'mua2']],
+                        'fat' : [mua_fat2.at[id_wl, 'mua1'], (mua_fat2.at[id_wl, 'mua2'] + mua_fat2.at[id_wl, 'mua1'])/2, mua_fat2.at[id_wl, 'mua2']],
+                        'muscle' : [mua_muscle2.at[id_wl, 'mua1'], (mua_muscle2.at[id_wl, 'mua2'] + mua_muscle2.at[id_wl, 'mua1'])/2, mua_muscle2.at[id_wl, 'mua2']],
+                        'ijv' : mua_ijv}
+                mua_change2 = np.array( list(product(mua_change['skin'], mua_change['fat'], mua_change['muscle'], mua_change['ijv'])))
+                mua_fix = {'air' : 0,
+                        'pla' : 1e4,
+                        'prism' : 0,
+                        'cca' : 0.44465}    
+                mua_fix2 = np.array(list(mua_fix.values()) * mua_change2.shape[0]).reshape(mua_change2.shape[0], len(mua_fix))
+                mua_all = np.concatenate((mua_fix2[:, 0:3], mua_change2, mua_change2[:, 3:4], mua_fix2[:, 3:4]), axis=1)
+                        
+        # ##############coding###################
+                for id_mua, mua in enumerate(tqdm(mua_all)):
+                        # get WMC reflectance, pathlength, collision times, wait to improve!
+                        movingAverageFinalReflectanceMean = postprocess.getMovingAverageReflectance(os.path.join(wl_path, sessionID), mua)
+                        small_reflectance[id_mua, :, id_wl] = movingAverageFinalReflectanceMean[sds_choose]    
+                        movingAverageMeanPathlength = postprocess.getMeanPathlength(os.path.join(wl_path, sessionID), mua)[1].mean(axis=0)
+                        purturbed_pathlength = movingAverageMeanPathlength[sds_choose, 6]   
+                        movingAverageNumofScatter = postprocess.getNumofScatter(os.path.join(wl_path, sessionID), mua)[1].mean(axis=0)
+                        purturbed_num_scatter = movingAverageNumofScatter[sds_choose, 6] 
+                        model_param = jd.load(os.path.join(sessionID, 'model_parameters.json'))
+                        perturbed_region_mus = model_param['OptParam']['IJV']['mus']
+                        perturbed_region_mua = mua[6]
+                        perturbed_region_mut = perturbed_region_mua + perturbed_region_mus
+                        ijv_mus = model_param['OptParam']['IJV']['mus']
+                        ijv_mua = mua[7]
+                        ijv_mut = ijv_mua + ijv_mus
+                        # #########WAIT CONFIRM###########
+                        # perturbed_coef = ((perturbed_region_mus / perturbed_region_mut) / (ijv_mus / ijv_mut))**purturbed_num_scatter\
+                        #                     * (perturbed_region_mut / ijv_mut)**purturbed_num_scatter * np.exp(-(perturbed_region_mut - ijv_mut) * purturbed_pathlength)
+                        # big_reflectance = small_reflectance * perturbed_coef
+                        # ################################
+                        big_reflectance[id_mua, :, id_wl] = small_reflectance[id_mua, :, id_wl] *0.9
+        R_ratio = (small_reflectance - big_reflectance) / big_reflectance[:, :, 0]
+                
+                
 
+           
+            
 
 
         
@@ -174,3 +186,6 @@ for id_mus in range(mus_count):
                 except:
                         continue
 # %%
+
+
+
