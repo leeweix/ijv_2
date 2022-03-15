@@ -124,22 +124,22 @@ for id_mus in range(NUM_MUS):
                         ################################
                         # big_reflectance[id_wl, id_mua, :] = small_reflectance[id_wl, id_mua, :] *0.9
         ac_div_dc = (small_reflectance - big_reflectance) / big_reflectance
-        R_ratio = ac_div_dc[1:5, :, :] / ac_div_dc[0, :, :]
+        R_ratio = ac_div_dc[1:ac_div_dc.shape[0], :, :] / ac_div_dc[0, :, :]
         # data processing
-        sds1 = ac_div_dc[:, :, 0].T
-        sds2 = ac_div_dc[:, :, 1].T
-        sds3 = ac_div_dc[:, :, 2].T
-        df1 = pd.DataFrame(sds1, columns=wl_list)
-        df2 = pd.DataFrame(sds1, columns=wl_list)
-        df3 = pd.DataFrame(sds1, columns=wl_list)
-        df1['sds'] = [sds_choose[0]+1] * df1.shape[0]       
-        df2['sds'] = [sds_choose[1]+1] * df2.shape[0]
-        df3['sds'] = [sds_choose[2]+1] * df3.shape[0]
-        df1['stO2'] = list(stO2) * int(df1.shape[0] / len(stO2))    
-        df2['stO2'] = list(stO2) * int(df2.shape[0] / len(stO2)) 
-        df3['stO2'] = list(stO2) * int(df3.shape[0] / len(stO2)) 
-        df = pd.concat([df1, df2, df3], axis=0)   
-        df.to_csv(os.path.join(output_path, f'{id_mus}.csv'))    
+        R_ratio = R_ratio.transpose(2, 1, 0)
+        wl_list2 = wl_list[1 : len(wl_list)]
+        for i in range(len(sds_choose)):
+                if i == 0:
+                        df = pd.DataFrame(R_ratio[0, :, :], columns=wl_list2)
+                        df['sds'] = [sds_choose[0]+1] * df.shape[0]
+                        df['stO2'] = list(stO2) * int(df.shape[0] / len(stO2))
+                else:
+                        df_temp = pd.DataFrame(R_ratio[i, :, :], columns=wl_list2)
+                        df_temp['sds'] = [sds_choose[i]+1] * df_temp.shape[0]
+                        df_temp['stO2'] = list(stO2) * int(df_temp.shape[0] / len(stO2))
+                        df = pd.concat([df, df_temp], axis=0)
+        df.fillna(0)
+        df.to_csv(os.path.join(output_path, f'{id_mus}.csv'))   
 
 
         
@@ -195,11 +195,14 @@ R_ratio = big_reflectance / small_reflectance
 
 
 # %% for change file name
-for id_mus in range(NUM_MUS):
+for id_mus in range(27):
     for id_wl, wl_path in enumerate(wl_folder):
         wl = wl_path.split('\\')[1]
         wl = wl.split('nm')[0]
         sessionID = 'small_ijv_' + wl + f'_{id_mus}'
+        config = jd.load(os.path.join(wl_path, sessionID, 'config.json'))
+        config["OutputPath"] = ""
+        jd.save(config, os.path.join(wl_path, sessionID, 'config.json'))
         for i in range(100):
                 filename = os.path.join(wl_path, sessionID, 'mcx_output', sessionID + f'_{i+10}_detp.jdat')
                 filename_af = filename.replace('.jdat', '')
