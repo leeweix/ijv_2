@@ -22,18 +22,28 @@ from tqdm import tqdm
 import pandas as pd
 from glob import glob
 from itertools import product
+from datetime import datetime
 
-def make_ijv_mua(id_wl, epsilon, saturation):
-        return list(2.303 * (epsilon.at[id_wl, 'HbO2']/64532*saturation + epsilon.at[id_wl, 'Hb']/64500*(1.-saturation)) * 150)
+def make_ijv_mua(id_wl, epsilon, stO2):
+        return list(2.303 * (epsilon.at[id_wl, 'HbO2']/64532*stO2 + epsilon.at[id_wl, 'Hb']/64500*(1.-stO2)) * 150)
 
 
 # user setting
 data_path = 'training_data'
+now = datetime.now()
+timestr =  now.strftime('%Y-%m%d-%H-%M-%S')
+output_path = f'R_ratio_{timestr}'
+if os.path.exists(output_path):
+        print('output folder already exist!')
+else:
+        os.mkdir(output_path)
 wl_folder = glob(os.path.join(data_path, '*nm'))
-mus_count = 27
+NUM_MUS = 1
+NUM_MUA = 1
 wl_list = [730, 760, 780, 810, 850]
 sds_choose = [7, 9, 11]
 sds_choose = np.array(sds_choose)-1
+stO2 = np.array([0.3, 0.4, 0.5, 0.6, 0.7])
 
 # load mua set
 mua_skin = pd.read_csv('skin.csv')
@@ -66,58 +76,70 @@ data = {'wavelength' : wl_list,
 mua_muscle2 = pd.DataFrame(data)
 
 # %%
-for id_mus in range(mus_count):
-        small_reflectance = np.zeros((len(mua_all), len(sds_choose), len(wl_list)))
-        big_reflectance = np.zeros((len(mua_all), len(sds_choose), len(wl_list)))
+for id_mus in range(NUM_MUS):
+        small_reflectance = np.zeros((len(wl_list), NUM_MUA * len(stO2), len(sds_choose)))
+        big_reflectance = np.zeros((len(wl_list), NUM_MUA * len(stO2), len(sds_choose)))
         for id_wl, wl_path in enumerate(wl_folder):
                 wl = wl_path.split('\\')[1]
                 wl = wl.split('nm')[0]
                 sessionID = 'small_ijv_' + wl + f'_{id_mus}'
-                
-                saturation = np.array([0.3, 0.4, 0.5, 0.6, 0.7])
-                mua_ijv = make_ijv_mua(id_wl, epsilon, saturation)
+                mua_ijv = make_ijv_mua(id_wl, epsilon, stO2)
                 
                 # define mua change
-                mua_change = {'skin' : [mua_skin2.at[id_wl, 'mua1'], (mua_skin2.at[id_wl, 'mua2'] + mua_skin2.at[id_wl, 'mua1'])/2, mua_skin2.at[id_wl, 'mua2']],
-                        'fat' : [mua_fat2.at[id_wl, 'mua1'], (mua_fat2.at[id_wl, 'mua2'] + mua_fat2.at[id_wl, 'mua1'])/2, mua_fat2.at[id_wl, 'mua2']],
-                        'muscle' : [mua_muscle2.at[id_wl, 'mua1'], (mua_muscle2.at[id_wl, 'mua2'] + mua_muscle2.at[id_wl, 'mua1'])/2, mua_muscle2.at[id_wl, 'mua2']],
+                # mua_change = {'skin' : [mua_skin2.at[id_wl, 'mua1'], (mua_skin2.at[id_wl, 'mua2'] + mua_skin2.at[id_wl, 'mua1'])/2, mua_skin2.at[id_wl, 'mua2']],
+                #         'fat' : [mua_fat2.at[id_wl, 'mua1'], (mua_fat2.at[id_wl, 'mua2'] + mua_fat2.at[id_wl, 'mua1'])/2, mua_fat2.at[id_wl, 'mua2']],
+                #         'muscle' : [mua_muscle2.at[id_wl, 'mua1'], (mua_muscle2.at[id_wl, 'mua2'] + mua_muscle2.at[id_wl, 'mua1'])/2, mua_muscle2.at[id_wl, 'mua2']],
+                #         'ijv' : mua_ijv}
+                mua_change = {'skin' : [mua_skin2.at[id_wl, 'mua1']],
+                        'fat' : [mua_fat2.at[id_wl, 'mua1']],
+                        'muscle' : [mua_muscle2.at[id_wl, 'mua1']],
                         'ijv' : mua_ijv}
-                mua_change2 = np.array( list(product(mua_change['skin'], mua_change['fat'], mua_change['muscle'], mua_change['ijv'])))
+                mua_change2 = np.array(list(product(mua_change['skin'], mua_change['fat'], mua_change['muscle'], mua_change['ijv'])))
                 mua_fix = {'air' : 0,
                         'pla' : 1e4,
                         'prism' : 0,
                         'cca' : 0.44465}    
                 mua_fix2 = np.array(list(mua_fix.values()) * mua_change2.shape[0]).reshape(mua_change2.shape[0], len(mua_fix))
-                mua_all = np.concatenate((mua_fix2[:, 0:3], mua_change2, mua_change2[:, 3:4], mua_fix2[:, 3:4]), axis=1)
-                        
+                mua_all = np.concatenate((mua_fix2[:, 0:3], mua_change2[:, 0:3], mua_change2[:, 2:4], mua_fix2[:, 3:4]), axis=1)
         # ##############coding###################
                 for id_mua, mua in enumerate(tqdm(mua_all)):
                         # get WMC reflectance, pathlength, collision times, wait to improve!
                         movingAverageFinalReflectanceMean = postprocess.getMovingAverageReflectance(os.path.join(wl_path, sessionID), mua)
-                        small_reflectance[id_mua, :, id_wl] = movingAverageFinalReflectanceMean[sds_choose]    
+                        small_reflectance[id_wl, id_mua, :] = movingAverageFinalReflectanceMean[sds_choose]    
                         movingAverageMeanPathlength = postprocess.getMeanPathlength(os.path.join(wl_path, sessionID), mua)[1].mean(axis=0)
                         purturbed_pathlength = movingAverageMeanPathlength[sds_choose, 6]   
                         movingAverageNumofScatter = postprocess.getNumofScatter(os.path.join(wl_path, sessionID), mua)[1].mean(axis=0)
                         purturbed_num_scatter = movingAverageNumofScatter[sds_choose, 6] 
-                        model_param = jd.load(os.path.join(sessionID, 'model_parameters.json'))
+                        model_param = jd.load(os.path.join(wl_path, sessionID, 'model_parameters.json'))
                         perturbed_region_mus = model_param['OptParam']['IJV']['mus']
-                        perturbed_region_mua = mua[6]
+                        perturbed_region_mua = mua[7]
                         perturbed_region_mut = perturbed_region_mua + perturbed_region_mus
-                        ijv_mus = model_param['OptParam']['IJV']['mus']
-                        ijv_mua = mua[7]
-                        ijv_mut = ijv_mua + ijv_mus
-                        # #########WAIT CONFIRM###########
-                        # perturbed_coef = ((perturbed_region_mus / perturbed_region_mut) / (ijv_mus / ijv_mut))**purturbed_num_scatter\
-                        #                     * (perturbed_region_mut / ijv_mut)**purturbed_num_scatter * np.exp(-(perturbed_region_mut - ijv_mut) * purturbed_pathlength)
-                        # big_reflectance = small_reflectance * perturbed_coef
-                        # ################################
-                        big_reflectance[id_mua, :, id_wl] = small_reflectance[id_mua, :, id_wl] *0.9
-        R_ratio = (small_reflectance - big_reflectance) / big_reflectance[:, :, 0]
-                
-                
-
-           
-            
+                        muscle_mus = model_param['OptParam']['Muscle']['mus']
+                        muscle_mua = mua[6]
+                        muscle_mut = muscle_mua + muscle_mus
+                        #########WAIT CONFIRM###########
+                        perturbed_coef = ((perturbed_region_mus / perturbed_region_mut) / (muscle_mus / muscle_mut))**purturbed_num_scatter\
+                                        * (perturbed_region_mut / muscle_mut)**purturbed_num_scatter * np.exp(-(perturbed_region_mut - muscle_mut) * purturbed_pathlength)
+                        big_reflectance[id_wl, id_mua, :] = small_reflectance[id_wl, id_mua, :] * perturbed_coef
+                        ################################
+                        # big_reflectance[id_wl, id_mua, :] = small_reflectance[id_wl, id_mua, :] *0.9
+        ac_div_dc = (small_reflectance - big_reflectance) / big_reflectance
+        R_ratio = ac_div_dc[1:5, :, :] / ac_div_dc[0, :, :]
+        # data processing
+        sds1 = ac_div_dc[:, :, 0].T
+        sds2 = ac_div_dc[:, :, 1].T
+        sds3 = ac_div_dc[:, :, 2].T
+        df1 = pd.DataFrame(sds1, columns=wl_list)
+        df2 = pd.DataFrame(sds1, columns=wl_list)
+        df3 = pd.DataFrame(sds1, columns=wl_list)
+        df1['sds'] = [sds_choose[0]+1] * df1.shape[0]       
+        df2['sds'] = [sds_choose[1]+1] * df2.shape[0]
+        df3['sds'] = [sds_choose[2]+1] * df3.shape[0]
+        df1['stO2'] = list(stO2) * int(df1.shape[0] / len(stO2))    
+        df2['stO2'] = list(stO2) * int(df2.shape[0] / len(stO2)) 
+        df3['stO2'] = list(stO2) * int(df3.shape[0] / len(stO2)) 
+        df = pd.concat([df1, df2, df3], axis=0)   
+        df.to_csv(os.path.join(output_path, f'{id_mus}.csv'))    
 
 
         
@@ -173,7 +195,7 @@ R_ratio = big_reflectance / small_reflectance
 
 
 # %% for change file name
-for id_mus in range(mus_count):
+for id_mus in range(NUM_MUS):
     for id_wl, wl_path in enumerate(wl_folder):
         wl = wl_path.split('\\')[1]
         wl = wl.split('nm')[0]
