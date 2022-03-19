@@ -22,7 +22,7 @@ from datetime import datetime
 plt.close("all")
 plt.rcParams["figure.dpi"] = 300
 # sns.set()
-PATH = 'R_ratio_2022-0316-02-19-36'
+PATH = 'R_ratio_2022-0315-21-48-30'
 data_path = glob(os.path.join(PATH, '*.csv'))
 now = datetime.now()
 timestr =  now.strftime('%Y-%m%d-%H-%M-%S')
