@@ -16,6 +16,7 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import jdata as jd
+import json
 import postprocess
 import os
 from tqdm import tqdm
@@ -29,7 +30,7 @@ def make_ijv_mua(id_wl, epsilon, stO2):
 
 
 # user setting
-MODE = 1
+MODE_PERTURB = 1
 data_path = 'training_data'
 now = datetime.now()
 timestr =  now.strftime('%Y-%m%d-%H-%M-%S')
@@ -83,6 +84,7 @@ for id_mus in range(NUM_MUS):
         for id_wl, wl_path in enumerate(wl_folder):
                 wl = wl_path.split('\\')[1]
                 wl = wl.split('nm')[0]
+                id_mus = 13
                 sessionID = 'small_ijv_' + wl + f'_{id_mus}'
                 sessionID2 = 'large_ijv_' + wl + f'_{id_mus}'
                 mua_ijv = make_ijv_mua(id_wl, epsilon, stO2)
@@ -106,18 +108,121 @@ for id_mus in range(NUM_MUS):
         # ##############coding###################
                 for id_mua, mua in enumerate(tqdm(mua_all)):
                         # get WMC reflectance, pathlength, collision times, wait to improve!
-                        if MODE == 0:
-                                movingAverageFinalReflectanceMean = postprocess.getMovingAverageReflectance(os.path.join(wl_path, sessionID), mua)
+                        if MODE_PERTURB == 1:
+                                if id_mua == 0:
+                                        # movingAverageFinalReflectanceMean
+                                        with open(os.path.join(wl_path, sessionID, "config.json")) as f:
+                                                config = json.load(f)  # about detector na, & photon number
+                                        with open(os.path.join(wl_path, sessionID, "model_parameters.json")) as f:
+                                                modelParameters = json.load(f)  # about index of materials & fiber number
+                                        fiberSet = modelParameters["HardwareParam"]["Detector"]["Fiber"]
+                                        detOutputPathSet = glob(os.path.join(wl_path, sessionID, "mcx_output", "*.jdat"))  # about paths of detected photon data
+                                        innerIndex = modelParameters["OptParam"]["Prism"]["n"]
+                                        outerIndex = modelParameters["OptParam"]["Prism"]["n"]
+                                        detectorNA = config["DetectorNA"]
+                                        detectorNum = len(fiberSet)*3*2
+                                        photonNum = config["PhotonNum"]
+                                        # getReflectance
+                                        reflectance = np.empty((len(detOutputPathSet), detectorNum))
+                                        meanPathlength = np.empty((len(detOutputPathSet), detectorNum, len(mua)))
+                                        NumofScatter = np.empty((len(detOutputPathSet), detectorNum, len(mua)))
+                                        for detOutputIdx, detOutputPath in enumerate(detOutputPathSet):
+                                                # read detected data
+                                                detOutput = jd.load(detOutputPath)
+                                                info = detOutput["MCXData"]["Info"]
+                                                photonData = detOutput["MCXData"]["PhotonData"]
+                                                
+                                                # unit conversion for photon pathlength
+                                                photonData["ppath"] = photonData["ppath"] * info["LengthUnit"]
+                                                
+                                                # retrieve valid detector ID and valid ppath
+                                                critAng = np.arcsin(detectorNA/innerIndex)
+                                                afterRefractAng = np.arccos(abs(photonData["v"][:, 2]))
+                                                beforeRefractAng = np.arcsin(outerIndex*np.sin(afterRefractAng)/innerIndex)
+                                                validPhotonBool = beforeRefractAng <= critAng
+                                                validDetID = photonData["detid"][validPhotonBool]
+                                                validDetID = validDetID - 1  # make detid start from 0
+                                                validPPath = photonData["ppath"][validPhotonBool]
+                                                validNScat = photonData["nscat"][validPhotonBool]
+                                                
+                                                # calculate reflectance        
+                                                for detectorIdx in range(info["DetNum"]):
+                                                        usedValidPPath = validPPath[validDetID[:, 0]==detectorIdx]
+                                                        arrmua = np.array(mua)
+                                                        weight = np.exp(-(usedValidPPath @ arrmua))
+                                                        reflectance[detOutputIdx][detectorIdx] = weight.sum() / photonNum
+                                                        
+                                                        # mean pathlength
+                                                        eachPhotonWeight = weight
+                                                        if eachPhotonWeight.sum() == 0:
+                                                                meanPathlength[detOutputIdx][detectorIdx] = 0
+                                                                continue
+                                                        eachPhotonPercent = eachPhotonWeight / eachPhotonWeight.sum()
+                                                        eachPhotonPercent = eachPhotonPercent.reshape(-1, 1)
+                                                        meanPathlength[detOutputIdx][detectorIdx] = np.sum(eachPhotonPercent*usedValidPPath, axis=0)
+                                                        
+                                                        # num of scatter
+                                                        usedValidPPath2 = validNScat[validDetID[:, 0]==detectorIdx]
+                                                        eachPhotonWeight2 = np.exp(-(usedValidPPath2 @ arrmua))
+                                                        if eachPhotonWeight2.sum() == 0:
+                                                                NumofScatter[detOutputIdx][detectorIdx] = 0
+                                                                continue
+                                                        eachPhotonPercent2 = eachPhotonWeight2 / eachPhotonWeight2.sum()
+                                                        eachPhotonPercent2 = eachPhotonPercent2.reshape(-1, 1)
+                                                        NumofScatter[detOutputIdx][detectorIdx] = np.sum(eachPhotonPercent2*usedValidPPath2, axis=0)
+                                else:
+                                        reflectance = np.empty((len(detOutputPathSet), detectorNum))
+                                        meanPathlength = np.empty((len(detOutputPathSet), detectorNum, len(mua)))
+                                        NumofScatter = np.empty((len(detOutputPathSet), detectorNum, len(mua)))
+                                        for detOutputIdx, detOutputPath in enumerate(detOutputPathSet):
+                                                # calculate reflectance        
+                                                for detectorIdx in range(info["DetNum"]):
+                                                        usedValidPPath = validPPath[validDetID[:, 0]==detectorIdx]
+                                                        arrmua = np.array(mua)
+                                                        weight = np.exp(-(usedValidPPath @ arrmua))
+                                                        reflectance[detOutputIdx][detectorIdx] = weight.sum() / photonNum
+                                                        
+                                                        # mean pathlength
+                                                        eachPhotonWeight = weight
+                                                        if eachPhotonWeight.sum() == 0:
+                                                                meanPathlength[detOutputIdx][detectorIdx] = 0
+                                                                continue
+                                                        eachPhotonPercent = eachPhotonWeight / eachPhotonWeight.sum()
+                                                        eachPhotonPercent = eachPhotonPercent.reshape(-1, 1)
+                                                        meanPathlength[detOutputIdx][detectorIdx] = np.sum(eachPhotonPercent*usedValidPPath, axis=0)
+                                                        
+                                                        # num of scatter
+                                                        usedValidPPath2 = validNScat[validDetID[:, 0]==detectorIdx]
+                                                        eachPhotonWeight2 = np.exp(-(usedValidPPath2 @ arrmua))
+                                                        if eachPhotonWeight2.sum() == 0:
+                                                                NumofScatter[detOutputIdx][detectorIdx] = 0
+                                                                continue
+                                                        eachPhotonPercent2 = eachPhotonWeight2 / eachPhotonWeight2.sum()
+                                                        eachPhotonPercent2 = eachPhotonPercent2.reshape(-1, 1)
+                                                        NumofScatter[detOutputIdx][detectorIdx] = np.sum(eachPhotonPercent2*usedValidPPath2, axis=0)
+                                movingAverageFinalReflectance = reflectance.reshape(reflectance.shape[0], -1, 3, 2).mean(axis=-1)
+                                movingAverageFinalReflectance = postprocess.movingAverage2D(movingAverageFinalReflectance, width=3).reshape(movingAverageFinalReflectance.shape[0], -1)
+                                movingAverageFinalReflectanceMean = movingAverageFinalReflectance.mean(axis=0)
+                                
+                                # getMeanPathlength
+                                cvSampleNum = 10
+                                meanPathlength = meanPathlength.reshape(-1, cvSampleNum, meanPathlength.shape[-2], meanPathlength.shape[-1]).mean(axis=0)
+                                movingAverageMeanPathlength = meanPathlength.reshape(meanPathlength.shape[0], -1, 3, 2, meanPathlength.shape[-1]).mean(axis=-2)
+                                movingAverageMeanPathlength = postprocess.movingAverage2D(movingAverageMeanPathlength, width=3).reshape(movingAverageMeanPathlength.shape[0], -1, movingAverageMeanPathlength.shape[-1])
+                                movingAverageMeanPathlength = movingAverageMeanPathlength.mean(axis=0)
+                                
+                                # get num of scatter
+                                NumofScatter = NumofScatter.reshape(-1, cvSampleNum, NumofScatter.shape[-2], NumofScatter.shape[-1]).mean(axis=0)
+                                movingAverageNumofScatter = NumofScatter.reshape(NumofScatter.shape[0], -1, 3, 2, NumofScatter.shape[-1]).mean(axis=-2)
+                                movingAverageNumofScatter = postprocess.movingAverage2D(movingAverageNumofScatter, width=3).reshape(movingAverageNumofScatter.shape[0], -1, movingAverageNumofScatter.shape[-1])
+                                movingAverageNumofScatter = movingAverageNumofScatter.mean(axis=0)
                                 small_reflectance[id_wl, id_mua, :] = movingAverageFinalReflectanceMean[sds_choose]    
-                                movingAverageMeanPathlength = postprocess.getMeanPathlength(os.path.join(wl_path, sessionID), mua)[1].mean(axis=0)
                                 purturbed_pathlength = movingAverageMeanPathlength[sds_choose, 6]   
-                                movingAverageNumofScatter = postprocess.getNumofScatter(os.path.join(wl_path, sessionID), mua)[1].mean(axis=0)
                                 purturbed_num_scatter = movingAverageNumofScatter[sds_choose, 6] 
-                                model_param = jd.load(os.path.join(wl_path, sessionID, 'model_parameters.json'))
-                                perturbed_region_mus = model_param['OptParam']['IJV']['mus']
+                                perturbed_region_mus = modelParameters['OptParam']['IJV']['mus']*0.1
                                 perturbed_region_mua = mua[7]
                                 perturbed_region_mut = perturbed_region_mua + perturbed_region_mus
-                                muscle_mus = model_param['OptParam']['Muscle']['mus']
+                                muscle_mus = modelParameters['OptParam']['Muscle']['mus']*0.1
                                 muscle_mua = mua[6]
                                 muscle_mut = muscle_mua + muscle_mus
                                 #########WAIT CONFIRM###########
@@ -150,7 +255,7 @@ for id_mus in range(NUM_MUS):
                         df = pd.concat([df, df_temp], axis=0)
         df.fillna(0)
         df.to_csv(os.path.join(output_path, f'{id_mus}.csv'))   
-
+        print(f'Output save to {output_path} !')
 
         
         
@@ -220,7 +325,7 @@ for id_mus in range(27):
                         os.rename(filename, filename_af)
                 except:
                         continue
-# %%
 
+# %%
 
 
