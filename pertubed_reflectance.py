@@ -20,17 +20,29 @@ import json
 import postprocess
 import os
 from tqdm import tqdm
+from tqdm.contrib import tzip
 import pandas as pd
 from glob import glob
 from itertools import product
 from datetime import datetime
+from scipy.signal import convolve
 
 def make_ijv_mua(id_wl, epsilon, stO2):
-        return list(2.303 * (epsilon.at[id_wl, 'HbO2']/64532*stO2 + epsilon.at[id_wl, 'Hb']/64500*(1.-stO2)) * 150)
+        return list(0.1 * 2.303 * (epsilon.at[id_wl, 'HbO2']/64532*stO2 + epsilon.at[id_wl, 'Hb']/64500*(1.-stO2)) * 150)
+def movingAverage2D(arr, width):
+    if arr.ndim == 3:
+        kernel = np.ones((1, width, width))
+    elif arr.ndim == 4:
+        kernel = np.ones((1, width, width, 1))
+    else:
+        raise Exception("arr shape is strange !")
+    return convolve(arr, kernel, "valid") / width**2
 
+def make_mua(num, mua_bound):
+    return 0.1 * np.interp([i / (num-1) for i in range(num)], [0, 1], mua_bound)
 
 # user setting
-MODE_PERTURB = 1
+MODE_PERTURB = 0
 data_path = 'training_data'
 now = datetime.now()
 timestr =  now.strftime('%Y-%m%d-%H-%M-%S')
@@ -41,11 +53,13 @@ else:
         os.mkdir(output_path)
 wl_folder = glob(os.path.join(data_path, '*nm'))
 NUM_MUS = 1
-NUM_MUA = 1
+NUM_MUA = 54
 wl_list = [730, 760, 780, 810, 850]
-sds_choose = [7, 9, 11]
+wl_list3 = ['small_730', 'small_760', 'small_780', 'small_810', 'small_850', 'large_730', 'large_760', 'large_780', 'large_810', 'large_850']
+mua_list = ['air', 'pla', 'prism', 'skin', 'fat', 'muscle', 'perturb', 'ijv', 'cca']
+sds_choose = [1, 8, 15]
 sds_choose = np.array(sds_choose)-1
-stO2 = np.array([0.3, 0.4, 0.5, 0.6, 0.7])
+stO2 = np.array([0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75])
 
 # load mua set
 mua_skin = pd.read_csv('skin.csv')
@@ -78,13 +92,13 @@ data = {'wavelength' : wl_list,
 mua_muscle2 = pd.DataFrame(data)
 
 # %%
-for id_mus in range(NUM_MUS):
+for id_mus in reversed(range(NUM_MUS)):
         small_reflectance = np.zeros((len(wl_list), NUM_MUA * len(stO2), len(sds_choose)))
         big_reflectance = np.zeros((len(wl_list), NUM_MUA * len(stO2), len(sds_choose)))
         for id_wl, wl_path in enumerate(wl_folder):
                 wl = wl_path.split('\\')[1]
                 wl = wl.split('nm')[0]
-                id_mus = 13
+                id_mus = 26
                 sessionID = 'small_ijv_' + wl + f'_{id_mus}'
                 sessionID2 = 'large_ijv_' + wl + f'_{id_mus}'
                 mua_ijv = make_ijv_mua(id_wl, epsilon, stO2)
@@ -94,9 +108,13 @@ for id_mus in range(NUM_MUS):
                 #         'fat' : [mua_fat2.at[id_wl, 'mua1'], (mua_fat2.at[id_wl, 'mua2'] + mua_fat2.at[id_wl, 'mua1'])/2, mua_fat2.at[id_wl, 'mua2']],
                 #         'muscle' : [mua_muscle2.at[id_wl, 'mua1'], (mua_muscle2.at[id_wl, 'mua2'] + mua_muscle2.at[id_wl, 'mua1'])/2, mua_muscle2.at[id_wl, 'mua2']],
                 #         'ijv' : mua_ijv}
-                mua_change = {'skin' : [mua_skin2.at[id_wl, 'mua1']],
-                        'fat' : [mua_fat2.at[id_wl, 'mua1']],
-                        'muscle' : [mua_muscle2.at[id_wl, 'mua1']],
+                # mua_change = {'skin' : [mua_skin2.at[id_wl, 'mua1']],
+                #         'fat' : [mua_fat2.at[id_wl, 'mua1']],
+                #         'muscle' : [mua_muscle2.at[id_wl, 'mua1']],
+                #         'ijv' : mua_ijv}
+                mua_change = {'skin' : make_mua(3, mua_skin2.iloc[id_wl, 1:3]),
+                        'fat' : make_mua(3, mua_fat2.iloc[id_wl, 1:3]),
+                        'muscle' : make_mua(6, mua_muscle2.iloc[id_wl, 1:3]),
                         'ijv' : mua_ijv}
                 mua_change2 = np.array(list(product(mua_change['skin'], mua_change['fat'], mua_change['muscle'], mua_change['ijv'])))
                 mua_fix = {'air' : 0,
@@ -105,8 +123,9 @@ for id_mus in range(NUM_MUS):
                         'cca' : 0.44465}    
                 mua_fix2 = np.array(list(mua_fix.values()) * mua_change2.shape[0]).reshape(mua_change2.shape[0], len(mua_fix))
                 mua_all = np.concatenate((mua_fix2[:, 0:3], mua_change2[:, 0:3], mua_change2[:, 2:4], mua_fix2[:, 3:4]), axis=1)
+                mua_all2 = np.concatenate((mua_fix2[:, 0:3], mua_change2[:, 0:4], mua_change2[:, 3:4], mua_fix2[:, 3:4]), axis=1)
         # ##############coding###################
-                for id_mua, mua in enumerate(tqdm(mua_all)):
+                for id_mua, (mua, mua2) in enumerate(tzip(mua_all, mua_all2)):
                         # get WMC reflectance, pathlength, collision times, wait to improve!
                         if MODE_PERTURB == 1:
                                 if id_mua == 0:
@@ -232,15 +251,143 @@ for id_mus in range(NUM_MUS):
                                 ################################
                                 # big_reflectance[id_wl, id_mua, :] = small_reflectance[id_wl, id_mua, :] *0.9
                         else:
-                                movingAverageFinalReflectanceMean = postprocess.getMovingAverageReflectance(os.path.join(wl_path, sessionID), mua)
+                                if id_mua == 0:
+                                        # movingAverageFinalReflectanceMean
+                                        with open(os.path.join(wl_path, sessionID, "config.json")) as f:
+                                                config = json.load(f)  # about detector na, & photon number
+                                        with open(os.path.join(wl_path, sessionID2, "config.json")) as f:
+                                                config3 = json.load(f)  # about detector na, & photon number
+                                        with open(os.path.join(wl_path, sessionID, "model_parameters.json")) as f:
+                                                modelParameters = json.load(f)  # about index of materials & fiber number
+                                        with open(os.path.join(wl_path, sessionID2, "model_parameters.json")) as f:
+                                                modelParameters3 = json.load(f)  # about index of materials & fiber number
+                                        fiberSet = modelParameters["HardwareParam"]["Detector"]["Fiber"]
+                                        detOutputPathSet = glob(os.path.join(wl_path, sessionID, "mcx_output", "*.jdat"))  # about paths of detected photon data
+                                        innerIndex = modelParameters["OptParam"]["Prism"]["n"]
+                                        outerIndex = modelParameters["OptParam"]["Prism"]["n"]
+                                        detectorNA = config["DetectorNA"]
+                                        detectorNum = len(fiberSet)*3*2
+                                        photonNum = config["PhotonNum"]
+                                        fiberSet3 = modelParameters3["HardwareParam"]["Detector"]["Fiber"]
+                                        detOutputPathSet3 = glob(os.path.join(wl_path, sessionID2, "mcx_output", "*.jdat"))  # about paths of detected photon data
+                                        innerIndex3 = modelParameters3["OptParam"]["Prism"]["n"]
+                                        outerIndex3 = modelParameters3["OptParam"]["Prism"]["n"]
+                                        detectorNA3 = config3["DetectorNA"]
+                                        detectorNum3 = len(fiberSet3)*3*2
+                                        photonNum3 = config3["PhotonNum"]
+                                        # getReflectance
+                                        reflectance = np.empty((len(detOutputPathSet), detectorNum))
+                                        reflectance3 = np.empty((len(detOutputPathSet3), detectorNum3))
+                                        detOutput = []
+                                        detOutput3 = []
+                                        for detOutputIdx, detOutputPath in enumerate(detOutputPathSet):
+                                                # read detected data
+                                                detOutput.append(jd.load(detOutputPath))
+                                                info = detOutput[detOutputIdx]["MCXData"]["Info"]
+                                                photonData = detOutput[detOutputIdx]["MCXData"]["PhotonData"]
+                                                
+                                                # unit conversion for photon pathlength
+                                                photonData["ppath"] = photonData["ppath"] * info["LengthUnit"]
+                                                
+                                                # retrieve valid detector ID and valid ppath
+                                                critAng = np.arcsin(detectorNA/innerIndex)
+                                                afterRefractAng = np.arccos(abs(photonData["v"][:, 2]))
+                                                beforeRefractAng = np.arcsin(outerIndex*np.sin(afterRefractAng)/innerIndex)
+                                                validPhotonBool = beforeRefractAng <= critAng
+                                                validDetID = photonData["detid"][validPhotonBool]
+                                                validDetID = validDetID - 1  # make detid start from 0
+                                                validPPath = photonData["ppath"][validPhotonBool]
+                                                
+                                                # calculate reflectance        
+                                                for detectorIdx in range(info["DetNum"]):
+                                                        usedValidPPath = validPPath[validDetID[:, 0]==detectorIdx]
+                                                        arrmua = np.array(mua)
+                                                        weight = np.exp(-(usedValidPPath @ arrmua))
+                                                        reflectance[detOutputIdx][detectorIdx] = weight.sum() / photonNum
+                                                        
+                                        for detOutputIdx, detOutputPath in enumerate(detOutputPathSet3):
+                                                # read detected data
+                                                detOutput3.append(jd.load(detOutputPath))
+                                                info3 = detOutput3[detOutputIdx]["MCXData"]["Info"]
+                                                photonData3 = detOutput3[detOutputIdx]["MCXData"]["PhotonData"]
+                                                
+                                                # unit conversion for photon pathlength
+                                                photonData3["ppath"] = photonData3["ppath"] * info3["LengthUnit"]
+                                                
+                                                # retrieve valid detector ID and valid ppath
+                                                critAng3 = np.arcsin(detectorNA3/innerIndex3)
+                                                afterRefractAng3 = np.arccos(abs(photonData3["v"][:, 2]))
+                                                beforeRefractAng3 = np.arcsin(outerIndex3*np.sin(afterRefractAng3)/innerIndex3)
+                                                validPhotonBool3 = beforeRefractAng3 <= critAng3
+                                                validDetID3 = photonData3["detid"][validPhotonBool3]
+                                                validDetID3 = validDetID3 - 1  # make detid start from 0
+                                                validPPath3 = photonData3["ppath"][validPhotonBool3]
+                                                
+                                                # calculate reflectance        
+                                                for detectorIdx in range(info3["DetNum"]):
+                                                        usedValidPPath3 = validPPath3[validDetID3[:, 0]==detectorIdx]
+                                                        arrmua3 = np.array(mua2)
+                                                        weight3 = np.exp(-(usedValidPPath3 @ arrmua3))
+                                                        reflectance3[detOutputIdx][detectorIdx] = weight3.sum() / photonNum3
+                                                        
+                                else:
+                                        reflectance = np.empty((len(detOutputPathSet), detectorNum))
+                                        reflectance3 = np.empty((len(detOutputPathSet3), detectorNum))
+                                        for detOutputIdx, detOutputPath in enumerate(detOutputPathSet):
+                                                info = detOutput[detOutputIdx]["MCXData"]["Info"]
+                                                photonData = detOutput[detOutputIdx]["MCXData"]["PhotonData"]
+                                                
+                                                # unit conversion for photon pathlength
+                                                # photonData["ppath"] = photonData["ppath"] * info["LengthUnit"]
+                                                
+                                                # retrieve valid detector ID and valid ppath
+                                                critAng = np.arcsin(detectorNA/innerIndex)
+                                                afterRefractAng = np.arccos(abs(photonData["v"][:, 2]))
+                                                beforeRefractAng = np.arcsin(outerIndex*np.sin(afterRefractAng)/innerIndex)
+                                                validPhotonBool = beforeRefractAng <= critAng
+                                                validDetID = photonData["detid"][validPhotonBool]
+                                                validDetID = validDetID - 1  # make detid start from 0
+                                                validPPath = photonData["ppath"][validPhotonBool]
+                                                # calculate reflectance        
+                                                for detectorIdx in range(info["DetNum"]):
+                                                        usedValidPPath = validPPath[validDetID[:, 0]==detectorIdx]
+                                                        arrmua = np.array(mua)
+                                                        weight = np.exp(-(usedValidPPath @ arrmua))
+                                                        reflectance[detOutputIdx][detectorIdx] = weight.sum() / photonNum
+                                        for detOutputIdx, detOutputPath in enumerate(detOutputPathSet3):
+                                                # read detected data
+                                                info3 = detOutput3[detOutputIdx]["MCXData"]["Info"]
+                                                photonData3 = detOutput3[detOutputIdx]["MCXData"]["PhotonData"]
+                                                
+                                                # unit conversion for photon pathlength
+                                                # photonData3["ppath"] = photonData3["ppath"] * info3["LengthUnit"]
+                                                
+                                                # retrieve valid detector ID and valid ppath
+                                                critAng3 = np.arcsin(detectorNA3/innerIndex3)
+                                                afterRefractAng3 = np.arccos(abs(photonData3["v"][:, 2]))
+                                                beforeRefractAng3 = np.arcsin(outerIndex3*np.sin(afterRefractAng3)/innerIndex3)
+                                                validPhotonBool3 = beforeRefractAng3 <= critAng3
+                                                validDetID3 = photonData3["detid"][validPhotonBool3]
+                                                validDetID3 = validDetID3 - 1  # make detid start from 0
+                                                validPPath3 = photonData3["ppath"][validPhotonBool3]
+                                                # calculate reflectance        
+                                                for detectorIdx in range(info3["DetNum"]):
+                                                        usedValidPPath3 = validPPath3[validDetID3[:, 0]==detectorIdx]
+                                                        arrmua3 = np.array(mua2)
+                                                        weight3 = np.exp(-(usedValidPPath3 @ arrmua3))
+                                                        reflectance3[detOutputIdx][detectorIdx] = weight3.sum() / photonNum3
+                                movingAverageFinalReflectance = reflectance.reshape(reflectance.shape[0], -1, 3, 2).mean(axis=-1)
+                                movingAverageFinalReflectance = movingAverage2D(movingAverageFinalReflectance, width=3).reshape(movingAverageFinalReflectance.shape[0], -1)
+                                movingAverageFinalReflectanceMean = movingAverageFinalReflectance.mean(axis=0)
+                                movingAverageFinalReflectance3 = reflectance3.reshape(reflectance3.shape[0], -1, 3, 2).mean(axis=-1)
+                                movingAverageFinalReflectance3 = movingAverage2D(movingAverageFinalReflectance3, width=3).reshape(movingAverageFinalReflectance3.shape[0], -1)
+                                movingAverageFinalReflectanceMean3 = movingAverageFinalReflectance3.mean(axis=0)
                                 small_reflectance[id_wl, id_mua, :] = movingAverageFinalReflectanceMean[sds_choose]
-                                movingAverageFinalReflectanceMean = postprocess.getMovingAverageReflectance(os.path.join(wl_path, sessionID2), mua)
-                                big_reflectance[id_wl, id_mua, :] = movingAverageFinalReflectanceMean[sds_choose]
-                                
-                                
-        ac_div_dc = (small_reflectance - big_reflectance) / big_reflectance
+                                big_reflectance[id_wl, id_mua, :] = movingAverageFinalReflectanceMean3[sds_choose] 
+        ac_div_dc = small_reflectance / big_reflectance
         R_ratio = ac_div_dc[1:ac_div_dc.shape[0], :, :] / ac_div_dc[0, :, :]
         # data processing
+        reflectance2 = np.concatenate((small_reflectance.transpose(2, 1, 0), big_reflectance.transpose(2, 1, 0)), axis = 2)
         R_ratio = R_ratio.transpose(2, 1, 0)
         wl_list2 = wl_list[1 : len(wl_list)]
         for i in range(len(sds_choose)):
@@ -248,14 +395,21 @@ for id_mus in range(NUM_MUS):
                         df = pd.DataFrame(R_ratio[0, :, :], columns=wl_list2)
                         df['sds'] = [sds_choose[0]+1] * df.shape[0]
                         df['stO2'] = list(stO2) * int(df.shape[0] / len(stO2))
+                        df2 = pd.DataFrame(reflectance2[0, :, :], columns=wl_list3)
+                        df = pd.concat([df, df2], axis=1)
                 else:
                         df_temp = pd.DataFrame(R_ratio[i, :, :], columns=wl_list2)
                         df_temp['sds'] = [sds_choose[i]+1] * df_temp.shape[0]
                         df_temp['stO2'] = list(stO2) * int(df_temp.shape[0] / len(stO2))
+                        df2 = pd.DataFrame(reflectance2[i, :, :], columns=wl_list3)
+                        df_temp = pd.concat([df_temp, df2], axis=1)
                         df = pd.concat([df, df_temp], axis=0)
-        df.fillna(0)
+        # df.fillna(0)
+        df_mua = pd.DataFrame(np.array(list(mua_all)*len(sds_choose)), columns = mua_list)
+        df = pd.concat([df.reset_index(drop=True), df_mua], axis=1)
         df.to_csv(os.path.join(output_path, f'{id_mus}.csv'))   
-        print(f'Output save to {output_path} !')
+        print('\n')
+        print(f'Output {id_mus}.csv successfully save to {output_path} !')
 
         
         
@@ -315,16 +469,28 @@ for id_mus in range(27):
         wl = wl_path.split('\\')[1]
         wl = wl.split('nm')[0]
         sessionID = 'small_ijv_' + wl + f'_{id_mus}'
+        sessionID2 = 'large_ijv_' + wl + f'_{id_mus}'
         config = jd.load(os.path.join(wl_path, sessionID, 'config.json'))
         config["OutputPath"] = ""
         jd.save(config, os.path.join(wl_path, sessionID, 'config.json'))
+        config2 = jd.load(os.path.join(wl_path, sessionID2, 'config.json'))
+        config["OutputPath"] = ""
+        jd.save(config2, os.path.join(wl_path, sessionID2, 'config.json'))
         for i in range(100):
                 filename = os.path.join(wl_path, sessionID, 'mcx_output', sessionID + f'_{i+10}_detp.jdat')
                 filename_af = filename.replace('.jdat', '')
                 try:
-                        os.rename(filename, filename_af)
+                        # os.rename(filename, filename_af)
+                        os.rename(filename_af, filename)
                 except:
-                        continue
+                        print('no file')
+                filename2 = os.path.join(wl_path, sessionID2, 'mcx_output', sessionID2 + f'_{i+10}_detp.jdat')
+                filename_af2 = filename2.replace('.jdat', '')
+                try:
+                        # os.rename(filename2, filename_af2)
+                        os.rename(filename_af2, filename2)
+                except:
+                        print('no file')
 
 # %%
 

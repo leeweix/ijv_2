@@ -226,7 +226,7 @@ def getMovingAverageReflectance(sessionID, mua):
         modelParameters = json.load(f)  # about index of materials & fiber number
     fiberSet = modelParameters["HardwareParam"]["Detector"]["Fiber"]
     detOutputPathSet = glob(os.path.join(config["OutputPath"], sessionID, "mcx_output", "*.jdat"))  # about paths of detected photon data
-    print(detOutputPathSet)
+    # print(detOutputPathSet)
     reflectance = getReflectance(mua,
                                  innerIndex = modelParameters["OptParam"]["Prism"]["n"], 
                                  outerIndex = modelParameters["OptParam"]["Prism"]["n"], 
@@ -433,4 +433,84 @@ if __name__ == "__main__":
     
     
     
-    
+
+def getSinglePhotonWeight2(ppath, mua):
+    """
+
+    Parameters
+    ----------
+    ppath : TYPE
+        pathlength [mm], 2d array.
+    mua : TYPE
+        absorption coefficient [1/mm], 1d numpy array or list
+
+    Returns
+    -------
+    weight : TYPE
+        final weight of single(each) photon
+
+    """
+    mua = np.array(mua)
+    # print(f'ppath.shape {ppath.shape}\n')
+    # print(f'mua.shape {mua.shape}\n')
+    weight = np.exp(-(ppath @ mua))
+
+        
+    return weight    
+
+def getReflectance2(mua, innerIndex, outerIndex, detectorNA, detectorNum, detOutputPathSet, photonNum, photonDataVisible=False):    
+    # analyze detected photon
+    reflectance = np.empty((len(detOutputPathSet), detectorNum))
+    for detOutputIdx, detOutputPath in enumerate(detOutputPathSet):
+        # read detected data
+        detOutput = jd.load(detOutputPath)
+        info = detOutput["MCXData"]["Info"]
+        if photonDataVisible:
+            global photonData
+        photonData = detOutput["MCXData"]["PhotonData"]
+        
+        # unit conversion for photon pathlength
+        photonData["ppath"] = photonData["ppath"] * info["LengthUnit"]
+        
+        # retrieve valid detector ID and valid ppath
+        critAng = np.arcsin(detectorNA/innerIndex)
+        afterRefractAng = np.arccos(abs(photonData["v"][:, 2]))
+        beforeRefractAng = np.arcsin(outerIndex*np.sin(afterRefractAng)/innerIndex)
+        validPhotonBool = beforeRefractAng <= critAng
+        validDetID = photonData["detid"][validPhotonBool]
+        validDetID = validDetID - 1  # make detid start from 0
+        validPPath = photonData["ppath"][validPhotonBool]
+        
+        # calculate reflectance        
+        for detectorIdx in range(info["DetNum"]):
+            usedValidPPath = validPPath[validDetID[:, 0]==detectorIdx]
+            # I = I0 * exp(-mua*L)
+            reflectance[detOutputIdx][detectorIdx] = getSinglePhotonWeight(usedValidPPath, mua).sum() / photonNum
+    return reflectance, usedValidPPath, info, detOutputPathSet
+
+
+
+def getMovingAverageReflectance2(sessionID, mua):
+    with open(os.path.join(sessionID, "config.json")) as f:
+        config = json.load(f)  # about detector na, & photon number
+    with open(os.path.join(sessionID, "model_parameters.json")) as f:
+        modelParameters = json.load(f)  # about index of materials & fiber number
+    fiberSet = modelParameters["HardwareParam"]["Detector"]["Fiber"]
+    detOutputPathSet = glob(os.path.join(config["OutputPath"], sessionID, "mcx_output", "*.jdat"))  # about paths of detected photon data
+    # print(detOutputPathSet)
+    reflectance = getReflectance(mua,
+                                 innerIndex = modelParameters["OptParam"]["Prism"]["n"], 
+                                 outerIndex = modelParameters["OptParam"]["Prism"]["n"], 
+                                 detectorNA = config["DetectorNA"], 
+                                 detectorNum = len(fiberSet)*3*2, 
+                                 detOutputPathSet = detOutputPathSet,
+                                 photonNum = config["PhotonNum"])
+    # print(f'reflectance: {reflectance}, shape: {reflectance.shape}')
+    # movingAverageFinalReflectanceMean = reflectance
+    movingAverageFinalReflectance = reflectance.reshape(reflectance.shape[0], -1, 3, 2).mean(axis=-1)
+
+    movingAverageFinalReflectance = movingAverage2D(movingAverageFinalReflectance, width=3).reshape(movingAverageFinalReflectance.shape[0], -1)
+
+    movingAverageFinalReflectanceMean = movingAverageFinalReflectance.mean(axis=0)
+
+    return movingAverageFinalReflectanceMean
