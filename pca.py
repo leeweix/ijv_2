@@ -14,6 +14,7 @@ except:
 from cProfile import label
 from configparser import Interpolation
 import os
+from pickle import TRUE
 from unicodedata import decimal
 import numpy as np
 import matplotlib as mpl
@@ -38,6 +39,10 @@ from sklearn.preprocessing import normalize
 from sklearn.preprocessing import Normalizer
 from sklearn.preprocessing import MinMaxScaler
 from scipy import spatial
+from scipy.interpolate import interpn
+from itertools import product
+import cv2
+from tqdm import tqdm
 plt.close("all")
 plt.rcParams["figure.dpi"] = 300
 # sns.set()
@@ -104,11 +109,37 @@ df_new = pd.DataFrame({'730': df_all['small_730'] / df_all['large_730'],
         '810': df_all['small_810'] / df_all['large_810'],
         '850': df_all['small_850'] / df_all['large_850'],
         'stO2': df_all['stO2'],
-        'sds': df_all['sds']})
-df_new1 = df_new[df_new['sds'] == 1]
-df_new2 = df_new[df_new['sds'] == 8]
-df_new3 = df_new[df_new['sds'] == 15]
-
+        'sds': df_all['sds'],
+        'skin': df_all['skin'],
+        'fat': df_all['fat'],
+        'muscle': df_all['muscle'],
+        'mus_skin': df_all['mus_skin'],
+        'mus_fat': df_all['mus_fat'],
+        'mus_muscle': df_all['mus_muscle'],
+        })
+df_new1 = df_new[df_new['sds'] == 1].reset_index().drop(['index'],axis=1)
+df_new2 = df_new[df_new['sds'] == 8].reset_index().drop(['index'],axis=1)
+df_new3 = df_new[df_new['sds'] == 15].reset_index().drop(['index'],axis=1)
+df_new_ref = (df_new1[['730', '760', '780', '810', '850']] 
+        + df_new2[['730', '760', '780', '810', '850']]
+        + df_new3[['730', '760', '780', '810', '850']]).mean(axis=1)
+df_new1['730'] /= df_new_ref
+df_new1['760'] /= df_new_ref
+df_new1['780'] /= df_new_ref
+df_new1['810'] /= df_new_ref
+df_new1['850'] /= df_new_ref
+df_new2['730'] /= df_new_ref
+df_new2['760'] /= df_new_ref
+df_new2['780'] /= df_new_ref
+df_new2['810'] /= df_new_ref
+df_new2['850'] /= df_new_ref
+df_new3['730'] /= df_new_ref
+df_new3['760'] /= df_new_ref
+df_new3['780'] /= df_new_ref
+df_new3['810'] /= df_new_ref
+df_new3['850'] /= df_new_ref
+df_new_all = pd.concat([df_new1, df_new2, df_new3])
+# df_new_all = 
 # seperate each sds
 df2 = df[['760', '780', '810', '850', 'sds', 'stO2']]
 # df13 = df13[['760', '780', '810', '850', 'sds', 'stO2']]
@@ -121,14 +152,1346 @@ df13_sds3 = df13[df13['sds'] == 15]
 x1 = [df_sds1[df_sds1['stO2'] == i] for i in np.round(np.linspace(0.3, 0.75, 10), decimals=2)]
 x2 = [df_sds2[df_sds2['stO2'] == i] for i in np.round(np.linspace(0.3, 0.75, 10), decimals=2)]
 x3 = [df_sds3[df_sds3['stO2'] == i] for i in np.round(np.linspace(0.3, 0.75, 10), decimals=2)]
-df_sds1_ = pd.concat([df_sds1, df_sds1.describe()], axis=0)
-df_sds2_ = pd.concat([df_sds2, df_sds2.describe()], axis=0)
-df_sds3_ = pd.concat([df_sds3, df_sds3.describe()], axis=0)
-df_sds1_.to_csv(f'{PATH}_sds1.csv')
-df_sds2_.to_csv(f'{PATH}_sds2.csv')
-df_sds3_.to_csv(f'{PATH}_sds3.csv')
+
+# muscle -> fat -> skin -> mus_muscle -> mus_fat -> mus_skin
+# 'skin': array([0.0465, 0.1367, 0.2269]),
+#  'fat': array([0.1098 , 0.11555, 0.1213 ]),
+#  'muscle': array([0.013  , 0.01916, 0.02532, 0.03148, 0.03764, 0.0438 ])
 
 
+mua_skin = [0.038, 0.1115, 0.185]
+mua_fat = [0.1015, 0.10425, 0.107 ]
+mua_muscle = [0.011, 0.0148, 0.0186, 0.0224, 0.0262, 0.03 ]
+mus_skin = [15.89, 20.6, 25.31]
+mus_fat	= [11.89, 17.025, 22.16]
+mus_muscle = [5.01, 6.455, 7.9]
+
+# %% bound plot mua_skin
+outpath = f'bound_mua_skin_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_fat, mua_muscle, mus_skin, mus_fat, mus_muscle))
+column = ['mua_fat', 'mua_muscle', 'mus_skin', 'mus_fat', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_all['skin'] == mua_skin[0]
+        mask_mid = df_all['skin'] == mua_skin[1]
+        mask_up = df_all['skin'] == mua_skin[2]
+        mask_sds1 = df_all['sds'] == 1
+        mask_sds2 = df_all['sds'] == 8
+        mask_sds3 = df_all['sds'] == 15
+        mask2 = df_all['fat'] == iter[0]
+        mask3 = df_all['muscle'] == iter[1]
+        mask4 = df_all['mus_skin'] == iter[2]
+        mask5 = df_all['mus_fat'] == iter[3]
+        mask6 = df_all['mus_muscle'] == iter[4]
+        df_low1 = df_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.8, 1.3, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[-1].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μa_skin {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+
+# %% bound plot mua_fat
+outpath = 'bound_mua_fat_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_muscle, mus_skin, mus_fat, mus_muscle))
+column = ['mua_skin', 'mua_muscle', 'mus_skin', 'mus_fat', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_all['fat'] == mua_fat[0]
+        mask_mid = df_all['fat'] ==  mua_fat[1]
+        mask_up = df_all['fat'] == mua_fat[2]
+        mask_sds1 = df_all['sds'] == 1
+        mask_sds2 = df_all['sds'] == 8
+        mask_sds3 = df_all['sds'] == 15
+        mask2 = df_all['skin'] == iter[0]
+        mask3 = df_all['muscle'] == iter[1]
+        mask4 = df_all['mus_skin'] == iter[2]
+        mask5 = df_all['mus_fat'] == iter[3]
+        mask6 = df_all['mus_muscle'] == iter[4]
+        df_low1 = df_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.8, 1.3, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[-1].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μa_fat {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+
+# %% bound plot mua_muscle
+outpath = 'bound_mua_muscle_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_fat, mus_skin, mus_fat, mus_muscle))
+column = ['mua_skin', 'mua_fat', 'mus_skin', 'mus_fat', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low1 = df_all['muscle'] == mua_muscle[0]
+        mask_low2 = df_all['muscle'] == mua_muscle[1]
+        mask_mid1 = df_all['muscle'] == mua_muscle[2]
+        mask_mid2 = df_all['muscle'] == mua_muscle[3]
+        mask_up1 = df_all['muscle'] == mua_muscle[4]
+        mask_up2 = df_all['muscle'] == mua_muscle[5]
+        mask_sds1 = df_all['sds'] == 1
+        mask_sds2 = df_all['sds'] == 8
+        mask_sds3 = df_all['sds'] == 15
+        mask2 = df_all['skin'] == iter[0]
+        mask3 = df_all['fat'] == iter[1]
+        mask4 = df_all['mus_skin'] == iter[2]
+        mask5 = df_all['mus_fat'] == iter[3]
+        mask6 = df_all['mus_muscle'] == iter[4]
+        df_low11 = df_all[(mask_low1 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low12 = df_all[(mask_low2 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid11 = df_all[(mask_mid1 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid12 = df_all[(mask_mid2 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up11 = df_all[(mask_up1 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up12 = df_all[(mask_up2 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low21 = df_all[(mask_low1 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low22 = df_all[(mask_low2 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid21 = df_all[(mask_mid1 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid22 = df_all[(mask_mid2 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up21 = df_all[(mask_up1 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up22 = df_all[(mask_up2 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low31 = df_all[(mask_low1 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low32 = df_all[(mask_low2 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid31 = df_all[(mask_mid1 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid32 = df_all[(mask_mid2 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up31 = df_all[(mask_up1 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up32 = df_all[(mask_up2 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+        xtick = np.round(np.linspace(0.8, 1.3, 11), 2)
+
+        df_low11.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub2', marker='o', grid=True)
+        df_low11.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub2', marker='o', grid=True)
+        df_low11.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub2', marker='o', grid=True)
+        df_low11.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub2', marker='o', grid=True)
+        
+        df_low21.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub2', marker='^', grid=True)
+        df_low21.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub2', marker='^', grid=True)
+        df_low21.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub2', marker='^', grid=True)
+        df_low21.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub2', marker='^', grid=True)
+        
+        df_low31.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub2', marker='x', grid=True)
+        df_low31.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub2', marker='x', grid=True)
+        df_low31.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub2', marker='x', grid=True)
+        df_low31.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub2', marker='x', grid=True)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[-1].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        # ax[0, 0].legend(loc='upper left')
+        # ax[0, 1].legend(loc='upper left')
+        # ax[1, 0].legend(loc='upper left')
+        # ax[1, 1].legend(loc='upper left')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μa_muscle {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+        
+
+# %% bound plot mus_skin
+outpath = 'bound_mus_skin_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_fat, mua_muscle, mus_fat, mus_muscle))
+column = ['mua_skin', 'mua_fat', 'mua_muscle', 'mus_fat', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_all['mus_skin'] == mus_skin[0]
+        mask_mid = df_all['mus_skin'] == mus_skin[1]
+        mask_up = df_all['mus_skin'] == mus_skin[2]
+        mask_sds1 = df_all['sds'] == 1
+        mask_sds2 = df_all['sds'] == 8
+        mask_sds3 = df_all['sds'] == 15
+        mask2 = df_all['skin'] == iter[0]
+        mask3 = df_all['fat'] == iter[1]
+        mask4 = df_all['muscle'] == iter[2]
+        mask5 = df_all['mus_fat'] == iter[3]
+        mask6 = df_all['mus_muscle'] == iter[4]
+        df_low1 = df_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.8, 1.3, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[-1].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μs_skin {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+
+# %% bound plot mus_fat
+outpath = 'bound_mus_fat_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_fat, mua_muscle, mus_skin, mus_muscle))
+column = ['mua_skin', 'mua_fat', 'mua_muscle', 'mus_skin', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_all['mus_fat'] == mus_fat[0]
+        mask_mid = df_all['mus_fat'] == mus_fat[1]
+        mask_up = df_all['mus_fat'] == mus_fat[2]
+        mask_sds1 = df_all['sds'] == 1
+        mask_sds2 = df_all['sds'] == 8
+        mask_sds3 = df_all['sds'] == 15
+        mask2 = df_all['skin'] == iter[0]
+        mask3 = df_all['fat'] == iter[1]
+        mask4 = df_all['muscle'] == iter[2]
+        mask5 = df_all['mus_skin'] == iter[3]
+        mask6 = df_all['mus_muscle'] == iter[4]
+        df_low1 = df_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.8, 1.3, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[-1].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μs_fat {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+
+# %% bound plot mus_muscle
+outpath = 'bound_mus_muscle_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_fat, mua_muscle, mus_skin, mus_fat))
+column = ['mua_skin', 'mua_fat', 'mua_muscle', 'mus_skin', 'mus_fat']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_all['mus_muscle'] == mus_muscle[0]
+        mask_mid = df_all['mus_muscle'] == mus_muscle[1]
+        mask_up = df_all['mus_muscle'] == mus_muscle[2]
+        mask_sds1 = df_all['sds'] == 1
+        mask_sds2 = df_all['sds'] == 8
+        mask_sds3 = df_all['sds'] == 15
+        mask2 = df_all['skin'] == iter[0]
+        mask3 = df_all['fat'] == iter[1]
+        mask4 = df_all['muscle'] == iter[2]
+        mask5 = df_all['mus_skin'] == iter[3]
+        mask6 = df_all['mus_fat'] == iter[4]
+        df_low1 = df_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.8, 1.3, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[-1].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μs_muscle {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+        
+# %% new bound plot mua_skin
+outpath = f'newbound_mua_skin_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_fat, mua_muscle, mus_skin, mus_fat, mus_muscle))
+column = ['mua_fat', 'mua_muscle', 'mus_skin', 'mus_fat', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_new_all['skin'] == mua_skin[0]
+        mask_mid = df_new_all['skin'] == mua_skin[1]
+        mask_up = df_new_all['skin'] == mua_skin[2]
+        mask_sds1 = df_new_all['sds'] == 1
+        mask_sds2 = df_new_all['sds'] == 8
+        mask_sds3 = df_new_all['sds'] == 15
+        mask2 = df_new_all['fat'] == iter[0]
+        mask3 = df_new_all['muscle'] == iter[1]
+        mask4 = df_new_all['mus_skin'] == iter[2]
+        mask5 = df_new_all['mus_fat'] == iter[3]
+        mask6 = df_new_all['mus_muscle'] == iter[4]
+        df_low1 = df_new_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_new_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_new_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_new_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_new_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_new_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_new_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_new_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_new_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(3, 2, figsize=(12, 12))
+        df_low1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.25, 0.55, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='730 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[2, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[0].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        ax[2, 0].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[2, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μa_skin {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+
+# %% new bound plot mua_fat
+outpath = 'newbound_mua_fat_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_muscle, mus_skin, mus_fat, mus_muscle))
+column = ['mua_skin', 'mua_muscle', 'mus_skin', 'mus_fat', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_new_all['fat'] == mua_fat[0]
+        mask_mid = df_new_all['fat'] ==  mua_fat[1]
+        mask_up = df_new_all['fat'] == mua_fat[2]
+        mask_sds1 = df_new_all['sds'] == 1
+        mask_sds2 = df_new_all['sds'] == 8
+        mask_sds3 = df_new_all['sds'] == 15
+        mask2 = df_new_all['skin'] == iter[0]
+        mask3 = df_new_all['muscle'] == iter[1]
+        mask4 = df_new_all['mus_skin'] == iter[2]
+        mask5 = df_new_all['mus_fat'] == iter[3]
+        mask6 = df_new_all['mus_muscle'] == iter[4]
+        df_low1 = df_new_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_new_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_new_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_new_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_new_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_new_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_new_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_new_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_new_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(3, 2, figsize=(12, 12))
+        df_low1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.25, 0.55, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='730 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[2, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[0].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        ax[2, 0].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[2, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μa_fat {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+
+# %% new bound plot mua_muscle
+outpath = 'newbound_mua_muscle_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_fat, mus_skin, mus_fat, mus_muscle))
+column = ['mua_skin', 'mua_fat', 'mus_skin', 'mus_fat', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low1 = df_new_all['muscle'] == mua_muscle[0]
+        mask_low2 = df_new_all['muscle'] == mua_muscle[1]
+        mask_mid1 = df_new_all['muscle'] == mua_muscle[2]
+        mask_mid2 = df_new_all['muscle'] == mua_muscle[3]
+        mask_up1 = df_new_all['muscle'] == mua_muscle[4]
+        mask_up2 = df_new_all['muscle'] == mua_muscle[5]
+        mask_sds1 = df_new_all['sds'] == 1
+        mask_sds2 = df_new_all['sds'] == 8
+        mask_sds3 = df_new_all['sds'] == 15
+        mask2 = df_new_all['skin'] == iter[0]
+        mask3 = df_new_all['fat'] == iter[1]
+        mask4 = df_new_all['mus_skin'] == iter[2]
+        mask5 = df_new_all['mus_fat'] == iter[3]
+        mask6 = df_new_all['mus_muscle'] == iter[4]
+        df_low11 = df_new_all[(mask_low1 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low12 = df_new_all[(mask_low2 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid11 = df_new_all[(mask_mid1 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid12 = df_new_all[(mask_mid2 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up11 = df_new_all[(mask_up1 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up12 = df_new_all[(mask_up2 & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low21 = df_new_all[(mask_low1 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low22 = df_new_all[(mask_low2 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid21 = df_new_all[(mask_mid1 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid22 = df_new_all[(mask_mid2 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up21 = df_new_all[(mask_up1 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up22 = df_new_all[(mask_up2 & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low31 = df_new_all[(mask_low1 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low32 = df_new_all[(mask_low2 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid31 = df_new_all[(mask_mid1 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid32 = df_new_all[(mask_mid2 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up31 = df_new_all[(mask_up1 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up32 = df_new_all[(mask_up2 & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(3, 2, figsize=(12, 12))
+        
+        df_low11.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, ub2', marker='o', grid=True)
+        df_low11.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds1, ub2', marker='o', grid=True)
+        df_low11.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds1, ub2', marker='o', grid=True)
+        df_low11.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds1, ub2', marker='o', grid=True)
+        df_low11.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb1', marker='o', grid=True)
+        df_low12.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, lb2', marker='o', grid=True)
+        df_mid11.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid1', marker='o', grid=True)
+        df_mid12.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, mid2', marker='o', grid=True)
+        df_up11.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub1', marker='o', grid=True)
+        df_up12.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds1, ub2', marker='o', grid=True)
+        
+        df_low21.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, ub2', marker='^', grid=True)
+        df_low21.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds2, ub2', marker='^', grid=True)
+        df_low21.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds2, ub2', marker='^', grid=True)
+        df_low21.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds2, ub2', marker='^', grid=True)
+        df_low21.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb1', marker='^', grid=True)
+        df_low22.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, lb2', marker='^', grid=True)
+        df_mid21.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid1', marker='^', grid=True)
+        df_mid22.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, mid2', marker='^', grid=True)
+        df_up21.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub1', marker='^', grid=True)
+        df_up22.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds2, ub2', marker='^', grid=True)
+        
+        df_low31.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, ub2', marker='x', grid=True)
+        df_low31.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '760', y = 'stO2', ax=ax[0, 0], label='sds3, ub2', marker='x', grid=True)
+        df_low31.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '780', y = 'stO2', ax=ax[0, 1], label='sds3, ub2', marker='x', grid=True)
+        df_low31.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '810', y = 'stO2', ax=ax[1, 0], label='sds3, ub2', marker='x', grid=True)
+        df_low31.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb1', marker='x', grid=True)
+        df_low32.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, lb2', marker='x', grid=True)
+        df_mid31.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid1', marker='x', grid=True)
+        df_mid32.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, mid2', marker='x', grid=True)
+        df_up31.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub1', marker='x', grid=True)
+        df_up32.plot(x = '850', y = 'stO2', ax=ax[1, 1], label='sds3, ub2', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.25, 0.55, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='730 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[2, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[0].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        ax[2, 0].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[2, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        fig.suptitle(f'μa_muscle {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+        
+
+# %% new bound plot mus_skin
+outpath = 'newbound_mus_skin_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_fat, mua_muscle, mus_fat, mus_muscle))
+column = ['mua_skin', 'mua_fat', 'mua_muscle', 'mus_fat', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_new_all['mus_skin'] == mus_skin[0]
+        mask_mid = df_new_all['mus_skin'] == mus_skin[1]
+        mask_up = df_new_all['mus_skin'] == mus_skin[2]
+        mask_sds1 = df_new_all['sds'] == 1
+        mask_sds2 = df_new_all['sds'] == 8
+        mask_sds3 = df_new_all['sds'] == 15
+        mask2 = df_new_all['skin'] == iter[0]
+        mask3 = df_new_all['fat'] == iter[1]
+        mask4 = df_new_all['muscle'] == iter[2]
+        mask5 = df_new_all['mus_fat'] == iter[3]
+        mask6 = df_new_all['mus_muscle'] == iter[4]
+        df_low1 = df_new_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_new_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_new_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_new_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_new_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_new_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_new_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_new_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_new_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(3, 2, figsize=(12, 12))
+        df_low1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.25, 0.55, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='730 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[2, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[0].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        ax[2, 0].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[2, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μs_skin {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+
+# %% new bound plot mus_fat
+outpath = 'newbound_mus_fat_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_fat, mua_muscle, mus_skin, mus_muscle))
+column = ['mua_skin', 'mua_fat', 'mua_muscle', 'mus_skin', 'mus_muscle']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_new_all['mus_fat'] == mus_fat[0]
+        mask_mid = df_new_all['mus_fat'] == mus_fat[1]
+        mask_up = df_new_all['mus_fat'] == mus_fat[2]
+        mask_sds1 = df_new_all['sds'] == 1
+        mask_sds2 = df_new_all['sds'] == 8
+        mask_sds3 = df_new_all['sds'] == 15
+        mask2 = df_new_all['skin'] == iter[0]
+        mask3 = df_new_all['fat'] == iter[1]
+        mask4 = df_new_all['muscle'] == iter[2]
+        mask5 = df_new_all['mus_skin'] == iter[3]
+        mask6 = df_new_all['mus_muscle'] == iter[4]
+        df_low1 = df_new_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_new_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_new_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_new_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_new_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_new_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_new_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_new_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_new_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(3, 2, figsize=(12, 12))
+        df_low1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.25, 0.55, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='730 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[2, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[0].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        ax[2, 0].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[2, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μs_fat {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+
+# %% new bound plot mus_muscle
+outpath = 'newbound_mus_muscle_'+ PATH
+if os.path.exists(outpath):
+        print(f'{outpath} already exists !')
+else: os.mkdir(outpath)
+iter_param = list(product(mua_skin, mua_fat, mua_muscle, mus_skin, mus_fat))
+column = ['mua_skin', 'mua_fat', 'mua_muscle', 'mus_skin', 'mus_fat']
+df_bound_mua = pd.DataFrame(np.array(iter_param), columns=column)
+df_bound_mua.to_csv(os.path.join(outpath, 'param.csv'))
+for pid, iter in enumerate(tqdm(iter_param)): 
+        mask_low = df_new_all['mus_muscle'] == mus_muscle[0]
+        mask_mid = df_new_all['mus_muscle'] == mus_muscle[1]
+        mask_up = df_new_all['mus_muscle'] == mus_muscle[2]
+        mask_sds1 = df_new_all['sds'] == 1
+        mask_sds2 = df_new_all['sds'] == 8
+        mask_sds3 = df_new_all['sds'] == 15
+        mask2 = df_new_all['skin'] == iter[0]
+        mask3 = df_new_all['fat'] == iter[1]
+        mask4 = df_new_all['muscle'] == iter[2]
+        mask5 = df_new_all['mus_skin'] == iter[3]
+        mask6 = df_new_all['mus_fat'] == iter[4]
+        df_low1 = df_new_all[(mask_low & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid1 = df_new_all[(mask_mid & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up1 = df_new_all[(mask_up & mask_sds1 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low2 = df_new_all[(mask_low & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid2 = df_new_all[(mask_mid & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up2 = df_new_all[(mask_up & mask_sds2 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_low3 = df_new_all[(mask_low & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_mid3 = df_new_all[(mask_mid & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        df_up3 = df_new_all[(mask_up & mask_sds3 & mask2 & mask3 & mask4 & mask5 & mask6)]
+        fig, ax = plt.subplots(3, 2, figsize=(12, 12))
+        df_low1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds1, ub', marker='o', grid=True)
+        df_low1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, lb', marker='o', grid=True)
+        df_mid1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, mid', marker='o', grid=True)
+        df_up1.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds1, ub', marker='o', grid=True)
+        
+        df_low2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds2, ub', marker='^', grid=True)
+        df_low2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, lb', marker='^', grid=True)
+        df_mid2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, mid', marker='^', grid=True)
+        df_up2.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds2, ub', marker='^', grid=True)
+        
+        df_low3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '730', y = 'stO2', ax=ax[0, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '760', y = 'stO2', ax=ax[0, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '780', y = 'stO2', ax=ax[1, 0], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '810', y = 'stO2', ax=ax[1, 1], label='sds3, ub', marker='x', grid=True)
+        df_low3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, lb', marker='x', grid=True)
+        df_mid3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, mid', marker='x', grid=True)
+        df_up3.plot(x = '850', y = 'stO2', ax=ax[2, 0], label='sds3, ub', marker='x', grid=True)
+        xtick = np.round(np.linspace(0.25, 0.55, 11), 2)
+        ax[0, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='730 nm')
+        ax[0, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='760 nm')
+        ax[1, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='780 nm')
+        ax[1, 1].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='810 nm')
+        ax[2, 0].set(xlabel='R', ylabel='SijvO2', xticks=xtick, title='850 nm')
+        lines, labels = fig.axes[0].get_legend_handles_labels()
+        ax[0, 0].get_legend().remove()
+        ax[0, 1].get_legend().remove()
+        ax[1, 0].get_legend().remove()
+        ax[1, 1].get_legend().remove()
+        ax[2, 0].get_legend().remove()
+        fig.legend(lines, labels, bbox_to_anchor=(1.1, 0.5), loc = 'right')
+        ax[0, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[2, 0].yaxis.set_major_formatter(FuncFormatter(to_percent))
+        # ax[0, 0].plot(df_low['780'], df_low['stO2'], marker='o', label='μa_skin lower bound')
+        # ax[0, 0].plot(df_up['780'], df_up['stO2'], marker='^', label='μa_skin upper bound')
+        # ax[0, 0].plot(df_mid['780'], df_mid['stO2'], marker='x', label='μa_skin middle')
+        fig.suptitle(f'μs_muscle {pid}', size=20)
+        fig.tight_layout()
+        fig.savefig(os.path.join(outpath, f'{pid:05d}.png'), bbox_inches='tight')
+        plt.close(fig)
+# %% write video
+# must check outpath
+result_name = os.path.join(outpath, 'output.mp4')
+
+frame_list = sorted(glob(os.path.join(outpath, "*.png")))
+print("frame count: ",len(frame_list))
+
+fps = 2
+shape = cv2.imread(frame_list[0]).shape # delete dimension 3
+size = (shape[1], shape[0])
+print("frame size: ",size)
+fourcc = cv2.VideoWriter_fourcc(*'XVID')
+out = cv2.VideoWriter(result_name, fourcc, fps, size)
+
+for idx, path in enumerate(frame_list):
+    frame = cv2.imread(path)
+    # print("\rMaking videos: {}/{}".format(idx+1, len(frame_list)), end = "")
+    current_frame = idx+1
+    total_frame_count = len(frame_list)
+    percentage = int(current_frame*30 / (total_frame_count+1))
+    print("\rProcess: [{}{}] {:06d} / {:06d}".format("#"*percentage, "."*(30-1-percentage), current_frame, total_frame_count), end ='')
+    out.write(frame)
+
+out.release()
+print("\nFinish making video !!!")
+# %%
+fig, ax = plt.subplots(1, 1)
+ax.plot(test_low['780'], test_low['stO2'], marker='o', label='μa_skin lower bound')
+ax.plot(test_up['780'], test_up['stO2'], marker='^', label='μa_skin upper bound')
+ax.plot(test_mid['780'], test_mid['stO2'], marker='x', label='μa_skin middle')
+ax.yaxis.set_major_formatter(FuncFormatter(to_percent))
+ax.legend()
+ax.set_xlabel('μa_skin')
+ax.set_ylabel('SijvO2')
+l1 = (test_mid['780'].values-test_low['780'].values).mean()
+l2 = (test_up['780'].values-test_mid['780'].values).mean()
+print(f'up/down = {l2/l1}')
+print(f'skin up/down = {(0.2269-0.1367)/(0.1367-0.0465)}')
+# ax.set_title('μa of skin')
+fig.tight_layout()
+fig.show()
 # %%    linear
 # df_mid = df_sds1.iloc[[i for i in range(len(df_sds1)) if i % 10 == 5]]
 # df13_sds1_mid = df13_sds1.iloc[[i for i in np.arange(180, 360, 1)]]
@@ -179,42 +1542,36 @@ plt.show()
 # plt.xlabel('R Square')
 # plt.ylabel('count')
 # plt.show()
-fig = plt.figure(figsize=(12, 8))
-fig.subplots_adjust(wspace=0.2, hspace=0.3)
-for i in range(4):
-        ax = fig.add_subplot(2, 2, i+1)
-        if i == 0:
-                ax.set_title('760 nm, SDS = 20.38 mm', fontsize=10)
-                ax.set_xlabel('SijvO2', fontsize=10)
-                ax.set_ylabel('R', fontsize=10)
-                for j in range(len(x2)):
-                        ax.plot(y_train['stO2'], x_train['760'], marker='o', color='red')
-                        ax.xaxis.set_major_formatter(FuncFormatter(to_percent))
-                        ax.scatter(df_sds2['stO2'], df_sds2['760'], marker='.', color='blue') 
-        elif i == 1:
-                ax.set_title('780 nm, SDS = 20.38 mm', fontsize=10)
-                ax.set_xlabel('SijvO2', fontsize=10)
-                ax.set_ylabel('R', fontsize=10)
-                for j in range(len(x2)):
-                        ax.plot(y_train['stO2'], x_train['780'], marker='o', color='red')
-                        ax.xaxis.set_major_formatter(FuncFormatter(to_percent))
-                        ax.scatter(df_sds2['stO2'], df_sds2['780'], marker='.', color='blue') 
-        elif i == 2:
-                ax.set_title('810 nm, SDS = 20.38 mm', fontsize=10)
-                ax.set_xlabel('SijvO2', fontsize=10)
-                ax.set_ylabel('R', fontsize=10)
-                for j in range(len(x2)):
-                        ax.plot(y_train['stO2'], x_train['810'], marker='o', color='red')
-                        ax.xaxis.set_major_formatter(FuncFormatter(to_percent))
-                        ax.scatter(df_sds2['stO2'], df_sds2['810'], marker='.', color='blue')    
-        else:
-                ax.set_title('850 nm, SDS = 20.38 mm', fontsize=10)
-                ax.set_xlabel('SijvO2', fontsize=10)
-                ax.set_ylabel('R', fontsize=10)
-                for j in range(len(x2)):
-                        ax.plot(y_train['stO2'], x_train['850'], marker='o', color='red')
-                        ax.xaxis.set_major_formatter(FuncFormatter(to_percent))
-                        ax.scatter(df_sds2['stO2'], df_sds2['850'], marker='.', color='blue') 
+fig, ax = plt.subplots(2, 2, figsize=(12, 8))
+ax[0, 0].set_title('760 nm, SDS = 20.38 mm', fontsize=10)
+ax[0, 0].set_xlabel('SijvO2', fontsize=10)
+ax[0, 0].set_ylabel('R', fontsize=10)
+for j in range(len(x2)):
+        ax[0, 0].plot(y_train['stO2'], x_train['760'], marker='o', color='red', alpha=1)
+        ax[0, 0].xaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 0].plot(df_sds2['stO2'], df_sds2['760'], marker='.', color='blue', alpha=0.4) 
+ax[0, 1].set_title('780 nm, SDS = 20.38 mm', fontsize=10)
+ax[0, 1].set_xlabel('SijvO2', fontsize=10)
+ax[0, 1].set_ylabel('R', fontsize=10)
+for j in range(len(x2)):
+        ax[0, 1].plot(y_train['stO2'], x_train['780'], marker='o', color='red', alpha=1)
+        ax[0, 1].xaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[0, 1].plot(df_sds2['stO2'], df_sds2['780'], marker='.', color='blue', alpha=0.4) 
+ax[1, 0].set_title('810 nm, SDS = 20.38 mm', fontsize=10)
+ax[1, 0].set_xlabel('SijvO2', fontsize=10)
+ax[1, 0].set_ylabel('R', fontsize=10)
+for j in range(len(x2)):
+        ax[1, 0].plot(y_train['stO2'], x_train['810'], marker='o', color='red', alpha=1)
+        ax[1, 0].xaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 0].plot(df_sds2['stO2'], df_sds2['810'], marker='.', color='blue', alpha=0.4)    
+ax[1, 1].set_title('850 nm, SDS = 20.38 mm', fontsize=10)
+ax[1, 1].set_xlabel('SijvO2', fontsize=10)
+ax[1, 1].set_ylabel('R', fontsize=10)
+for j in range(len(x2)):
+        ax[1, 1].plot(y_train['stO2'], x_train['850'], marker='o', color='red', alpha=1)
+        ax[1, 1].xaxis.set_major_formatter(FuncFormatter(to_percent))
+        ax[1, 1].plot(df_sds2['stO2'], df_sds2['850'], marker='.', color='blue', alpha=0.4) 
+fig.tight_layout()                        
 
 # %% three sds linear
 df13_sds1_mid = df13_sds1.iloc[[i for i in np.arange(260, 270, 1)]]
@@ -237,7 +1594,7 @@ print("Coefficient of determination: %.2f" % r2_score(y_train, y_pred))
 df_sds1 = df_sds1.reset_index()
 df_sds2 = df_sds2.reset_index()
 df_sds3 = df_sds3.reset_index()
-for id_sample in range(round(len(df_sds2) / 10)):
+for id_sample in range(len(df_sds2) // 10):
         sample_x1 = df_sds1.loc[[i + id_sample*10 for i in np.arange(10)], ['760', '780', '810', '850']]
         sample_x2 = df_sds2.loc[[i + id_sample*10 for i in np.arange(10)], ['760', '780', '810', '850']]
         sample_x3 = df_sds3.loc[[i + id_sample*10 for i in np.arange(10)], ['760', '780', '810', '850']]
@@ -362,13 +1719,17 @@ y_sample1 = sample_tissue.iloc[index1]
 y_sample2 = sample_tissue.iloc[index2]
 y_err = err_tissueX
 y_middle = middle_tissue
+y_sample1[[i for i in range(3)]] = y_sample1[[i for i in range(3)]]*100
+y_sample2[[i for i in range(3)]] = y_sample2[[i for i in range(3)]]*100
+y_err[[i for i in range(3)]] = y_err[[i for i in range(3)]]*100
+y_middle[[i for i in range(3)]] = y_middle[[i for i in range(3)]]*100
 plt.plot(np.arange(0, 6), y_sample1, marker='d', linewidth=0.1, alpha=0.3, label='model 1')
 plt.plot(np.arange(0, 6), y_sample2, marker='s', linewidth=0.1, alpha=0.3, label='model 2')
 plt.plot(np.arange(0, 6), y_err, marker='o', linewidth=0.1, alpha=1., label='bias 15%')
-plt.plot(np.arange(0, 6), y_middle, marker='*', linewidth=0.1, alpha=1., label='without bias')
+# plt.plot(np.arange(0, 6), y_middle, marker='*', linewidth=0.1, alpha=1., label='without bias')
 plt.ylabel('Coefficient (1/mm)')
 ticks = [i for i in range(6)]
-labels = ['μa_skin','μa_fat','μa_muscle','μs_skin','μs_fat','μs_muscle']
+labels = ['100*μa_skin','100*μa_fat','100*μa_muscle','μs_skin','μs_fat','μs_muscle']
 plt.xticks(ticks, labels, fontsize=10)
 plt.title('μa, μs of Interpolate Point and Two Prediction Model')
 plt.legend()
@@ -429,30 +1790,69 @@ x_error1 = df_err1[['730', '760', '780', '810', '850']]
 x_error2 = df_err2[['730', '760', '780', '810', '850']]
 x_error3 = df_err3[['730', '760', '780', '810', '850']]
 x_error = np.concatenate([x_error1.values, x_error2.values, x_error3.values], axis=1)
-x_error /= x_error.mean(axis=1)[:,None]
+# x_error /= x_error.mean(axis=1)[:,None]
 x_train1 = df_new1[['730', '760', '780', '810', '850']]
 x_train2 = df_new2[['730', '760', '780', '810', '850']]
 x_train3 = df_new3[['730', '760', '780', '810', '850']]
 y_train = df_new1[['stO2']]
 x_train = np.concatenate([x_train1.values, x_train2.values, x_train3.values], axis=1)
-x_train /= x_train.mean(axis=1)[:,None]
+# x_train /= x_train.mean(axis=1)[:,None]
 # scaler = MinMaxScaler()
 # scaler.fit(x_train)
 # x_train = scaler.transform(x_train)
 # x_error = scaler.transform(x_error)
 y_train = y_train.values
 # x_pred = x_train[0:10, :]
+
 regr_list = []
 for i in np.arange(0, len(x_train), 10):
-        regr = linear_model.LinearRegression(normalize=False)
+        regr = linear_model.LinearRegression(normalize=True)
         regr_list.append(regr.fit(x_train[i:i+10, :], y_train[i:i+10, :]))
-sample_tissue2 = sample_tissue.copy()
-tree = spatial.KDTree(sample_tissue2)
-distance1, index1 = tree.query(err_tissueX)
-sample_tissue2.iloc[index1] = [value for value in range(10000,10006)]
-tree = spatial.KDTree(sample_tissue2)
-distance2, index2 = tree.query(err_tissueX) 
-y_pred = regr_list[index1].predict(x_error) * (distance2 / (distance1+distance2)) + regr_list[index2].predict(x_error) * (distance1 / (distance1+distance2))
+# regr = linear_model.LinearRegression(normalize=False)
+# regr_list = [regr.fit(x_train[i:i+10, :], y_train[i:i+10, :]) for i in np.arange(0, len(x_train), 10)]
+# interp_values = [regr_list[i].predict(x_error)[0] for i in np.arange(0, len(regr_list))]
+interp_values = [regr_list[i].predict(x_train)[2] for i in np.arange(0, len(regr_list))]
+interp_values = np.array(interp_values).reshape(3, 3, 3, 3, 3, 6)
+grid_x = np.array([0.011, 0.0148, 0.0186, 0.0224, 0.0262, 0.03 ])
+grid_y = np.array([0.1015 , 0.10425, 0.107 ])
+grid_z = np.array([0.038, 0.1115, 0.185])
+grid_u = np.array([5.01, 6.455, 7.9])
+grid_v = np.array([11.89, 17.025, 22.16])
+grid_w = np.array([15.89, 20.6, 25.31])
+# interp_points = (grid_x, grid_y, grid_z, grid_u, grid_v, grid_w)
+interp_points = (grid_w, grid_v, grid_u, grid_z, grid_y, grid_x)
+# err_point = np.array([err_tissueX[2], err_tissueX[1], err_tissueX[0], err_tissueX[5], err_tissueX[4], err_tissueX[3]])
+# err_point = np.array([err_tissueX[3], err_tissueX[4], err_tissueX[5], err_tissueX[0],err_tissueX[1], err_tissueX[2]])
+# print(err_point)
+# err_point = np.array([0.011, 0.107, 0.038, 5.01, 11.89, 15.89])
+err_point = np.array([15.89, 11.89, 5.01, 0.038, 0.107, 0.011])
+print(err_point)
+# err_point[1] = 0.11
+print(to_percent(interpn(interp_points, interp_values, err_point, bounds_error=True), None))
+# %%
+
+# muscle -> fat -> skin -> mus_muscle -> mus_fat -> mus_skin
+# 'skin': array([0.0465, 0.1367, 0.2269]),
+#  'fat': array([0.1098 , 0.11555, 0.1213 ]),
+#  'muscle': array([0.013  , 0.01916, 0.02532, 0.03148, 0.03764, 0.0438 ])
+#  mus_skin	15.89,	20.6,	25.31,
+# mus_fat	11.89,	17.025,	22.16,
+# mus_muscle	5.01	6.455	7.9
+# 'skin': array([0.038, 0.1115, 0.185]),
+# ?'fat': array([0.1015 , 0.10425, 0.107 ]),
+# ?'muscle': array([0.011 ?, 0.0148, 0.0186, 0.0224, 0.0262, 0.03 ])
+
+# for i in np.arange(0, len(x_train), 10):
+#         regr = linear_model.LinearRegression(normalize=False)
+#         regr_list.append(regr.fit(x_train[i:i+10, :], y_train[i:i+10, :]))
+# sample_tissue2 = sample_tissue.copy()
+# tree = spatial.KDTree(sample_tissue2)
+# distance1, index1 = tree.query(err_tissueX)
+# sample_tissue2.iloc[index1] = [value for value in range(10000,10006)]
+# tree = spatial.KDTree(sample_tissue2)
+# distance2, index2 = tree.query(err_tissueX) 
+# y_pred = regr_list[index1].predict(x_error) * (distance2 / (distance1+distance2)) + regr_list[index2].predict(x_error) * (distance1 / (distance1+distance2))
+
 # y_pred = regr.predict(x_train)
 # # The coefficients
 # print("Coefficients: \n", regr.coef_, regr.intercept_)
@@ -461,16 +1861,19 @@ y_pred = regr_list[index1].predict(x_error) * (distance2 / (distance1+distance2)
 # # The coefficient of determination: 1 is perfect prediction
 # print("Coefficient of determination: %.2f" % r2_score(y_train, y_pred))
 # rmse
-print(f'rmse:  {rmse(y_train[0:10, :], y_pred)}')
+# print(f'rmse:  {rmse(y_train[0:10, :], y_pred)}')
 
 # plot tissue mua mus 
 plt.figure(figsize=(8, 6))
-y_sample1 = sample_tissue.iloc[index1]
-y_sample2 = sample_tissue.iloc[index2]
+# y_sample1 = sample_tissue.iloc[index1]
+# y_sample2 = sample_tissue.iloc[index2]
 y_err = err_tissueX
-plt.plot(np.arange(0, 6), y_sample1, marker='d', linewidth=0.1, alpha=0.3, label='model 1')
-plt.plot(np.arange(0, 6), y_sample2, marker='s', linewidth=0.1, alpha=0.3, label='model 2')
-plt.plot(np.arange(0, 6), y_err, marker='o', linewidth=0.1, alpha=1., label='bias 15%')
+# y_sample1[[i for i in range(3)]] = y_sample1[[i for i in range(3)]]*100
+# y_sample2[[i for i in range(3)]] = y_sample2[[i for i in range(3)]]*100
+y_err[[i for i in range(3)]] = y_err[[i for i in range(3)]]*100
+# plt.plot(np.arange(0, 6), y_sample1, marker='d', linewidth=0.1, alpha=0.3, label='model 1')
+# plt.plot(np.arange(0, 6), y_sample2, marker='s', linewidth=0.1, alpha=0.3, label='model 2')
+plt.scatter(np.arange(0, 6), y_err, marker='o', linewidth=0.1, alpha=1., label='bias 15%')
 plt.ylabel('Coefficient (1/mm)')
 ticks = [i for i in range(6)]
 labels = ['μa_skin','μa_fat','μa_muscle','μs_skin','μs_fat','μs_muscle']
@@ -484,11 +1887,13 @@ N = 10
 cmap = plt.get_cmap('jet',N)
 
 for i in range(10):
-        y_r = x_train[i+index1*10, :]
-        y_r2 = x_train[i+index2*10, :]
+        # y_r = x_train[i+index1*10, :]
+        # y_r2 = x_train[i+index2*10, :]
+        y_upper = x_train[i+0, :]
+        y_lower = x_train[i+14570, :]
         y_err = x_error[i, :]
-        plt.plot(np.arange(0, 15), y_r, c = cmap(i), marker='d', linewidth=0.1, alpha=0.3)
-        plt.plot(np.arange(0, 15), y_r2, c = cmap(i), marker='x', linewidth=0.1, alpha=0.3)
+        plt.plot(np.arange(0, 15), y_upper, c = cmap(i), marker='d', linewidth=0.1, alpha=0.3)
+        plt.plot(np.arange(0, 15), y_lower, c = cmap(i), marker='x', linewidth=0.1, alpha=0.3)
         plt.plot(np.arange(0, 15), y_err, c = cmap(i), marker='o', linewidth=0.1, alpha=1.)
 norm = mpl.colors.Normalize(vmin=30,vmax=75)
 sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
@@ -501,8 +1906,8 @@ ticks = [i for i in range(15)]
 labels = ['(1, 730)','(1, 760)','(1, 780)','(1, 810)','(1, 850)','(2, 730)','(2, 760)','(2, 780)','(2, 810)','(2, 850)','(3, 730)','(3, 760)','(3, 780)','(3, 810)','(3, 850)']
 plt.xticks(ticks, labels, fontsize=7)
 plt.title('Interpolate Point and Two Prediction Model')
-legend_elements = [Line2D([0], [0], marker='d', color='black', label='model 1'),
-                   Line2D([0], [0], marker='x', color='black', label='model 2'),
+legend_elements = [Line2D([0], [0], marker='d', color='black', label='upper bound'),
+                   Line2D([0], [0], marker='x', color='black', label='lower bound'),
                    Line2D([0], [0], marker='o', color='black', label='bias 15%')]
 plt.legend(handles=legend_elements, loc='upper right')
 
